@@ -16,6 +16,15 @@ from app.main import app
 from app.security import login_throttle
 
 
+@pytest.fixture(autouse=True)
+def no_real_alert_email(tmp_path, monkeypatch):
+    """Aucun test n'envoie de vrai e-mail ; l'état des alertes repart de zéro à chaque test."""
+    sent = []
+    monkeypatch.setattr("app.services.ai_alerts.send_admin_email", lambda subject, body: sent.append(subject))
+    monkeypatch.setenv("STATE_DIR", str(tmp_path))
+    return sent
+
+
 @pytest.fixture
 def db_session():
     """Session liée à une transaction annulée à la fin : les commits de l'API

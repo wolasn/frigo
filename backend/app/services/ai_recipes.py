@@ -79,12 +79,25 @@ Tu proposes des recettes familiales réalistes, en français, faisables dans une
 - Propose des recettes différentes les unes des autres."""
 
 
-class AiNotConfigured(RuntimeError):
-    pass
-
-
 class AiError(RuntimeError):
-    pass
+    """Erreur de génération. `kind` dit qui peut la corriger :
+    key / credit / access / not_configured → le super-administrateur (compte API) ;
+    temporary / request / response → réessayer suffit en général."""
+
+    ADMIN_KINDS = {"key", "credit", "access", "not_configured"}
+
+    def __init__(self, message: str, kind: str = "response") -> None:
+        super().__init__(message)
+        self.kind = kind
+
+    @property
+    def needs_admin(self) -> bool:
+        return self.kind in self.ADMIN_KINDS
+
+
+class AiNotConfigured(AiError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message, "not_configured")
 
 
 @dataclass
@@ -159,22 +172,28 @@ def generate(req: GenerationRequest, client: Any | None = None) -> list[Generate
             output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": RECIPE_SCHEMA}},
             messages=[{"role": "user", "content": build_prompt(req)}],
         )
-    except anthropic.AuthenticationError:
-        raise AiError("La clé d'API Claude est refusée : vérifie le secret anthropic_api_key.") from None
-    except anthropic.PermissionDeniedError:
-        raise AiError("Cette clé d'API n'a pas accès au modèle demandé.") from None
+    except anthropic.AuthenticationError as error:
+        # 401 : clé expirée, révoquée, supprimée ou mal recopiée — l'API ne distingue pas ces cas.
+        logger.error("Clé d'API Claude refusée : %s", error.message)
+        raise AiError("La clé d'API Claude est refusée : elle a peut-être expiré ou été révoquée. Crée une "
+                      "nouvelle clé sur console.anthropic.com (API Keys) et remplace le secret anthropic_api_key.",
+                      "key") from None
+    except anthropic.PermissionDeniedError as error:
+        logger.error("Accès refusé par l'API Claude : %s", error.message)
+        raise AiError("Cette clé d'API n'a pas accès au modèle demandé (clé désactivée ou espace de travail "
+                      "restreint).", "access") from None
     except anthropic.RateLimitError:
-        raise AiError("L'API Claude est saturée pour ce compte : réessaie dans une minute.") from None
+        raise AiError("L'API Claude est saturée pour ce compte : réessaie dans une minute.", "temporary") from None
     except anthropic.BadRequestError as error:
         logger.error("Requête refusée par l'API Claude : %s", error.message)
         if "credit balance" in str(error.message).lower():
             raise AiError("Le compte API Claude n'a plus de crédit : recharge-le sur console.anthropic.com "
-                          "(Plans & Billing).") from None
-        raise AiError("L'API Claude a refusé la requête.") from None
+                          "(Plans & Billing).", "credit") from None
+        raise AiError("L'API Claude a refusé la requête.", "request") from None
     except anthropic.APIStatusError as error:
-        raise AiError(f"L'API Claude est indisponible (erreur {error.status_code}).") from None
+        raise AiError(f"L'API Claude est indisponible (erreur {error.status_code}).", "temporary") from None
     except anthropic.APIConnectionError:
-        raise AiError("Impossible de joindre l'API Claude.") from None
+        raise AiError("Impossible de joindre l'API Claude.", "temporary") from None
 
     logger.info("Génération IA : modèle %s, %s jetons en entrée, %s en sortie, requête %s",
                 response.model, response.usage.input_tokens, response.usage.output_tokens,

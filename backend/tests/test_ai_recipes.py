@@ -125,8 +125,72 @@ def test_limite_quotidienne(client, catalogue, monkeypatch):
     assert client.post("/api/recipes/generate", json={"count": 1}).status_code == 429
 
 
-def test_cle_absente(client, monkeypatch):
+def _status_error(cls, status_code):
+    import httpx2
+
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    return cls("invalid x-api-key", response=httpx2.Response(status_code, request=request), body=None)
+
+
+class FailingClient(FakeClient):
+    def __init__(self, error):
+        super().__init__()
+        self.error = error
+
+    def _create(self, **kwargs):
+        raise self.error
+
+
+def test_cle_expiree_ou_revoquee():
+    import anthropic
+
+    with pytest.raises(AiError, match="expiré ou été révoquée") as caught:
+        generate(request(), FailingClient(_status_error(anthropic.AuthenticationError, 401)))
+    assert caught.value.kind == "key" and caught.value.needs_admin
+
+    with pytest.raises(AiError) as caught:
+        generate(request(), FailingClient(_status_error(anthropic.RateLimitError, 429)))
+    assert caught.value.kind == "temporary" and not caught.value.needs_admin
+
+
+def promote(db_session, username):
+    from sqlalchemy import update
+
+    from app.models import User
+    from app.models.enums import UserRole
+
+    db_session.execute(update(User).where(User.role == UserRole.SUPER_ADMIN).values(role=UserRole.USER))
+    db_session.execute(update(User).where(User.username == username).values(role=UserRole.SUPER_ADMIN))
+    db_session.flush()
+
+
+def test_cle_expiree_previent_le_super_admin_une_fois_par_jour(client, db_session, monkeypatch, no_real_alert_email):
+    def expired(request):
+        raise AiError("La clé d'API Claude est refusée : elle a peut-être expiré ou été révoquée.", "key")
+
+    monkeypatch.setattr(recipes_api, "ai_generate", expired)
+    client.post("/api/auth/register", json={"username": "admin", "display_name": "Admin", "password": PASSWORD})
+    promote(db_session, "admin")
+    client.cookies.clear()
     client.post("/api/auth/register", json={"username": "alice", "display_name": "Alice", "password": PASSWORD})
+
+    first = client.post("/api/recipes/generate", json={"count": 1})
+    assert first.status_code == 503
+    assert first.json()["detail"] == "Les recettes IA sont momentanément indisponibles. L'administrateur a été prévenu."
+    client.post("/api/recipes/generate", json={"count": 1})
+    assert no_real_alert_email == ["Clé d'API Claude refusée (expirée ou révoquée ?)"]  # une seule alerte
+
+    client.cookies.clear()
+    client.post("/api/auth/login", json={"username": "admin", "password": PASSWORD})
+    response = client.post("/api/recipes/generate", json={"count": 1})
+    assert "expiré ou été révoquée" in response.json()["detail"]  # le super-admin voit la vraie cause
+    messages = [n["message"] for n in client.get("/api/notifications").json()["items"]]
+    assert any("Clé d'API Claude refusée" in m for m in messages)
+
+
+def test_cle_absente(client, db_session, monkeypatch):
+    client.post("/api/auth/register", json={"username": "alice", "display_name": "Alice", "password": PASSWORD})
+    promote(db_session, "alice")
     monkeypatch.setattr("app.services.ai_recipes.read_secret", lambda name: None)
     response = client.post("/api/recipes/generate", json={"count": 1})
     assert response.status_code == 503 and "anthropic_api_key" in response.json()["detail"]

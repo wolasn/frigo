@@ -11,8 +11,8 @@ from sqlalchemy import func, or_, select
 from app.api.deps import CurrentUser, DbSession
 from app.clock import today
 from app.models import Recipe, RecipeStep, UserPreferences, UserRecipeMeta
-from app.models.enums import Diet, Difficulty, RecipeSource, RecipeStatus
-from app.services.ai_recipes import AiError, AiNotConfigured, GenerationRequest
+from app.models.enums import Diet, Difficulty, RecipeSource, RecipeStatus, UserRole
+from app.services.ai_recipes import AiError, GenerationRequest
 from app.services.ai_recipes import generate as ai_generate
 from app.services.marmiton import MarmitonError
 from app.services.proposals import (
@@ -353,10 +353,16 @@ def generate_recipes(body: GenerateIn, session: DbSession, user: CurrentUser) ->
                             detail=f"Limite atteinte : {AI_DAILY_LIMIT} recettes IA par jour. Réessaie demain.")
     try:
         generated = ai_generate(_generation_request(session, user, body))
-    except AiNotConfigured as error:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from None
     except AiError as error:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=str(error)) from None
+        if not error.needs_admin:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=str(error)) from None
+        # Clé expirée ou révoquée, crédit épuisé… : seul le super-administrateur peut corriger.
+        from app.services.ai_alerts import alert_admin
+
+        alert_admin(session, error)
+        detail = (str(error) if user.role == UserRole.SUPER_ADMIN
+                  else "Les recettes IA sont momentanément indisponibles. L'administrateur a été prévenu.")
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail) from None
 
     matcher = FoodMatcher(session)
     ids = [build_ai_recipe(session, recipe, user, matcher).id for recipe in generated]
