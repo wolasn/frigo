@@ -1,0 +1,18 @@
+# Lancement local : docker compose up --build
+# Les secrets sont des fichiers du dossier ./secrets (jamais versionnés),
+# montés dans le conteneur sous /run/secrets/<nom>.
+services:
+  app:
+    build:
+      context: .
+      args:
+        INSTALL_DEV: "true"
+    ports:
+      - "8000:8000"
+    secrets:
+      - database_url
+    restart: unless-stopped
+
+secrets:
+  database_url:
+    file: ./secrets/database_url

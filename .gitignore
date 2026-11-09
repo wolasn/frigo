@@ -1,0 +1,19 @@
+# Secrets : seuls le README et le .gitkeep du dossier sont versionnés
+secrets/*
+!secrets/README.md
+!secrets/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# Node
+node_modules/
+dist/
+
+# Sauvegardes de la base
+backups/
+*.dump
+*.sql.gz
