@@ -212,6 +212,15 @@ export type NotificationSummary = {
   items: { id: string; type: string; message: string; created_at: string; read: boolean }[];
 };
 
+export type Preferences = {
+  diet: "none" | "vegetarian" | "vegan";
+  default_servings: number;
+  expiring_soon_days: number;
+  thresholds: { category_id: string; category_name: string; days: number }[];
+  exclusions: { food_id: string; name: string; reason: "allergy" | "dislike" }[];
+  basics: { food_id: string; name: string; removable: boolean }[];
+};
+
 export type MetaUpdate = Partial<{ rating: number | null; comment: string | null; is_favorite: boolean; is_pinned: boolean }>;
 
 function query(params: Record<string, string | number | boolean | string[] | undefined>): string {
@@ -316,6 +325,20 @@ export const api = {
   deleteLocation: (id: string, locationId: string) => request<void>("DELETE", `/api/inventories/${id}/locations/${locationId}`),
   notifications: () => request<NotificationSummary>("GET", "/api/notifications"),
   readNotifications: () => request<void>("POST", "/api/notifications/read-all"),
+
+  preferences: () => request<Preferences>("GET", "/api/preferences"),
+  updatePreferences: (body: Partial<Pick<Preferences, "diet" | "default_servings" | "expiring_soon_days">>) =>
+    request<Preferences>("PATCH", "/api/preferences", body),
+  setThreshold: (categoryId: string, days: number) => request<Preferences>("PUT", `/api/preferences/thresholds/${categoryId}`, { days }),
+  removeThreshold: (categoryId: string) => request<Preferences>("DELETE", `/api/preferences/thresholds/${categoryId}`),
+  setExclusion: (foodId: string, reason: "allergy" | "dislike") => request<Preferences>("PUT", `/api/preferences/exclusions/${foodId}`, { reason }),
+  removeExclusion: (foodId: string) => request<Preferences>("DELETE", `/api/preferences/exclusions/${foodId}`),
+  addBasic: (foodId: string) => request<Preferences>("PUT", `/api/preferences/basics/${foodId}`),
+  removeBasic: (foodId: string) => request<Preferences>("DELETE", `/api/preferences/basics/${foodId}`),
+  updateProfile: (display_name: string) => request<User>("PATCH", "/api/auth/me", { display_name }),
+  changePassword: (current_password: string, new_password: string) =>
+    request<void>("POST", "/api/auth/password", { current_password, new_password }),
+  deleteAccount: (password: string) => request<void>("DELETE", "/api/auth/me", { password }),
 
   utensils: () => request<Utensil[]>("GET", "/api/utensils"),
   setUtensilOwned: (id: string, owned: boolean) => request<Utensil>("PUT", `/api/utensils/${id}/owned`, { owned }),

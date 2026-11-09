@@ -28,5 +28,11 @@ export default function App() {
   if (state.status === "anonymous") {
     return <AuthPage onAuthenticated={(user) => setState({ status: "ready", user })} />;
   }
-  return <HomePage user={state.user} onLoggedOut={() => setState({ status: "anonymous" })} />;
+  return (
+    <HomePage
+      user={state.user}
+      onLoggedOut={() => setState({ status: "anonymous" })}
+      onUserChanged={(user) => setState({ status: "ready", user })}
+    />
+  );
 }

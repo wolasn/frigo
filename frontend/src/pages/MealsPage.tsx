@@ -33,11 +33,21 @@ export default function MealsPage() {
   }, []);
 
   useEffect(() => {
-    api.inventories().then((list) => {
-      setInventories(list);
-      setSelectedInventories(list.filter((i) => i.include_in_suggestions).map((i) => i.id));
-      loadLeftovers(list);
-    });
+    // Les préférences donnent le régime et le nombre de personnes de départ ; l'inventaire suit.
+    api
+      .preferences()
+      .then((prefs) => {
+        setServings(prefs.default_servings);
+        setDiet(prefs.diet);
+      })
+      .catch(() => undefined)
+      .finally(() =>
+        api.inventories().then((list) => {
+          setInventories(list);
+          setSelectedInventories(list.filter((i) => i.include_in_suggestions).map((i) => i.id));
+          loadLeftovers(list);
+        }),
+      );
   }, [loadLeftovers]);
 
   const load = useCallback(() => {

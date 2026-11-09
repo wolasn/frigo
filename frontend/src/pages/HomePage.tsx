@@ -3,11 +3,12 @@ import { api, type User } from "../api";
 import AgendaPage from "./AgendaPage";
 import InventoryPage from "./InventoryPage";
 import MealsPage from "./MealsPage";
+import PreferencesPage from "./PreferencesPage";
 import SharingPage from "./SharingPage";
 import ShoppingPage from "./ShoppingPage";
 import UtensilsPage from "./UtensilsPage";
 
-type SectionId = "inventory" | "meals" | "agenda" | "shopping" | "utensils" | "sharing";
+type SectionId = "inventory" | "meals" | "agenda" | "shopping" | "utensils" | "sharing" | "preferences";
 
 const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "inventory", label: "Inventaire" },
@@ -16,6 +17,7 @@ const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "shopping", label: "Courses" },
   { id: "utensils", label: "Ustensiles" },
   { id: "sharing", label: "Partages" },
+  { id: "preferences", label: "Préférences" },
 ];
 
 function initialSection(): SectionId {
@@ -23,7 +25,15 @@ function initialSection(): SectionId {
   return SECTIONS.some((s) => s.id === hash) ? hash : "inventory";
 }
 
-export default function HomePage({ user, onLoggedOut }: { user: User; onLoggedOut: () => void }) {
+export default function HomePage({
+  user,
+  onLoggedOut,
+  onUserChanged,
+}: {
+  user: User;
+  onLoggedOut: () => void;
+  onUserChanged: (user: User) => void;
+}) {
   const [section, setSection] = useState<SectionId>(initialSection);
   const [busy, setBusy] = useState(false);
   const [badge, setBadge] = useState(0);
@@ -112,6 +122,7 @@ export default function HomePage({ user, onLoggedOut }: { user: User; onLoggedOu
         {section === "shopping" && <ShoppingPage />}
         {section === "utensils" && <UtensilsPage />}
         {section === "sharing" && <SharingPage onChanged={refreshBadge} />}
+        {section === "preferences" && <PreferencesPage user={user} onUserChanged={onUserChanged} onAccountDeleted={onLoggedOut} />}
       </main>
     </div>
   );

@@ -20,7 +20,14 @@ from app.security import (
     password_needs_rehash,
     verify_password,
 )
-from app.services.accounts import UsernameTaken, create_user, find_user_by_username
+from app.services.accounts import (
+    SuperAdminCannotLeave,
+    UsernameTaken,
+    create_user,
+    delete_account,
+    find_user_by_username,
+)
+from app.services.planning import recompute_reservations
 
 router = APIRouter(prefix="/api/auth", tags=["authentification"])
 
@@ -112,3 +119,58 @@ def logout(
 @router.get("/me")
 def me(user: CurrentUser) -> UserOut:
     return UserOut.of(user)
+
+
+class ProfileIn(BaseModel):
+    display_name: str = Field(min_length=1, max_length=60)
+
+
+class PasswordIn(BaseModel):
+    current_password: str = Field(max_length=200)
+    new_password: str = Field(min_length=10, max_length=200)
+
+
+class DeleteAccountIn(BaseModel):
+    password: str = Field(max_length=200)
+
+
+def _check_password(user: User, password: str) -> None:
+    if not verify_password(user.password_hash, password):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Mot de passe actuel incorrect.")
+
+
+@router.patch("/me")
+def update_profile(body: ProfileIn, session: DbSession, user: CurrentUser) -> UserOut:
+    user.display_name = body.display_name.strip()
+    session.commit()
+    return UserOut.of(user)
+
+
+@router.post("/password", status_code=status.HTTP_204_NO_CONTENT)
+def change_password(
+    body: PasswordIn,
+    session: DbSession,
+    user: CurrentUser,
+    token: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
+) -> None:
+    """Change le mot de passe et déconnecte tous les autres appareils."""
+    _check_password(user, body.current_password)
+    user.password_hash = hash_password(body.new_password)
+    current = hash_token(token) if token else ""
+    session.execute(delete(AuthSession).where(AuthSession.user_id == user.id, AuthSession.token_hash != current))
+    session.commit()
+
+
+@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
+def delete_my_account(body: DeleteAccountIn, session: DbSession, user: CurrentUser, response: Response) -> None:
+    _check_password(user, body.password)
+    try:
+        delete_account(session, user)
+    except SuperAdminCannotLeave:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="Le super-administrateur doit d'abord transmettre son rôle (commande super-admin --replace).",
+        ) from None
+    recompute_reservations(session)
+    session.commit()
+    response.delete_cookie(SESSION_COOKIE, path="/")
