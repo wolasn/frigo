@@ -63,9 +63,12 @@ def main(argv: list[str] | None = None) -> None:
               + (f" — e-mail : {status.email_error}" if status.email_error else ""))
         return
     if args.command == "test-email":
-        from app.mailer import send_admin_email
+        from app.mailer import MailError, MailNotConfigured, send_admin_email
 
-        send_admin_email("E-mail de test", "Si tu lis ce message, les alertes du super-administrateur fonctionnent.")
+        try:
+            send_admin_email("E-mail de test", "Si tu lis ce message, les alertes du super-administrateur fonctionnent.")
+        except (MailError, MailNotConfigured) as error:
+            raise SystemExit(f"Échec : {error}") from None
         print("E-mail de test envoyé.")
         return
 

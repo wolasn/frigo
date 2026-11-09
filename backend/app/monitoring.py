@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.db import check_database
-from app.mailer import MailNotConfigured, send_admin_email
+from app.mailer import MailError, MailNotConfigured, send_admin_email
 
 logger = logging.getLogger("frigo.monitoring")
 
@@ -105,7 +105,7 @@ def _try_send(status: DbStatus, send: Callable[[str, str], None], subject: str, 
     try:
         send(subject, body)
         status.email_error = None
-    except MailNotConfigured as error:
+    except (MailNotConfigured, MailError) as error:
         status.email_error = str(error)
         logger.warning("Alerte non envoyée : %s", error)
     except Exception as error:  # noqa: BLE001 - l'échec de l'e-mail ne doit pas arrêter la surveillance

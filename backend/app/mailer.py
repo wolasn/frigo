@@ -21,6 +21,10 @@ class MailNotConfigured(RuntimeError):
     pass
 
 
+class MailError(RuntimeError):
+    pass
+
+
 def send_admin_email(subject: str, body: str) -> None:
     sender = read_secret("smtp_sender")
     password = read_secret("smtp_password")
@@ -34,8 +38,18 @@ def send_admin_email(subject: str, body: str) -> None:
     message["Subject"] = f"[Frigo & Repas] {subject}"
     message.set_content(body)
 
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
-        smtp.starttls(context=ssl.create_default_context())
-        smtp.login(sender, password.replace(" ", ""))  # Google affiche le mot de passe d'application par blocs
-        smtp.send_message(message)
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
+            smtp.starttls(context=ssl.create_default_context())
+            # PLAIN en premier : Gmail le propose toujours (Google affiche le mot de passe par blocs).
+            smtp.user, smtp.password = sender, password.replace(" ", "")
+            smtp.auth("PLAIN", smtp.auth_plain, initial_response_ok=True)
+            smtp.send_message(message)
+    except smtplib.SMTPAuthenticationError:
+        raise MailError(
+            "Gmail refuse l'identifiant ou le mot de passe : vérifie que smtp_password est un mot de passe "
+            "d'application créé sur le même compte que smtp_sender."
+        ) from None
+    except (smtplib.SMTPException, OSError) as error:
+        raise MailError(f"Envoi impossible ({type(error).__name__}).") from None
     logger.info("E-mail envoyé au super-administrateur : %s", subject)  # jamais l'adresse dans les journaux
