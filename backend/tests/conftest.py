@@ -1,6 +1,13 @@
 """Fixtures communes : session de base annulée à la fin de chaque test, client HTTP."""
 
-import pytest
+import os
+import tempfile
+
+# Avant d'importer l'application : pas de tâches planifiées, état de surveillance dans un dossier jetable.
+os.environ["SCHEDULER_ENABLED"] = "false"
+os.environ.setdefault("STATE_DIR", tempfile.mkdtemp(prefix="frigo-state-"))
+
+import pytest  # noqa: E402
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 

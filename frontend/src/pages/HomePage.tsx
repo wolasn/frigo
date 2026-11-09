@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type User } from "../api";
+import { SuperAdminBanner } from "../components/StatusViews";
 import AgendaPage from "./AgendaPage";
 import InventoryPage from "./InventoryPage";
 import MealsPage from "./MealsPage";
@@ -116,6 +117,7 @@ export default function HomePage({
       </header>
 
       <main className="mx-auto max-w-5xl px-4 py-6">
+        {user.role === "super_admin" && <SuperAdminBanner />}
         {section === "inventory" && <InventoryPage />}
         {section === "meals" && <MealsPage />}
         {section === "agenda" && <AgendaPage />}

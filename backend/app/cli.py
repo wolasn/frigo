@@ -4,6 +4,9 @@
     python -m app.cli super-admin <identifiant> --replace   remplace l'actuel
     python -m app.cli seed-catalogue                         charge le catalogue de départ
     python -m app.cli rematch-ingredients                    refait le rapprochement des ingrédients
+    python -m app.cli check-db                               vérifie la base maintenant
+    python -m app.cli purge                                  lance la purge nocturne
+    python -m app.cli test-email                             envoie un e-mail de test au super-administrateur
 """
 
 import argparse
@@ -47,7 +50,24 @@ def main(argv: list[str] | None = None) -> None:
     promote.add_argument("--replace", action="store_true", help="remplacer le super-administrateur actuel")
     commands.add_parser("seed-catalogue", help="charger ou mettre à jour le catalogue de départ")
     commands.add_parser("rematch-ingredients", help="refaire le rapprochement des ingrédients Marmiton")
+    commands.add_parser("check-db", help="vérifier la base maintenant (une tentative) et alerter si besoin")
+    commands.add_parser("purge", help="lancer la purge nocturne maintenant")
+    commands.add_parser("test-email", help="envoyer un e-mail de test au super-administrateur")
     args = parser.parse_args(argv)
+
+    if args.command == "check-db":
+        from app.monitoring import run_check
+
+        status = run_check(retries=1)
+        print(f"Base : {status.status}" + (f" ({status.cause})" if status.cause else "")
+              + (f" — e-mail : {status.email_error}" if status.email_error else ""))
+        return
+    if args.command == "test-email":
+        from app.mailer import send_admin_email
+
+        send_admin_email("E-mail de test", "Si tu lis ce message, les alertes du super-administrateur fonctionnent.")
+        print("E-mail de test envoyé.")
+        return
 
     with Session(get_engine()) as session:
         if args.command == "super-admin":
@@ -59,6 +79,10 @@ def main(argv: list[str] | None = None) -> None:
             counts = seed_catalogue(session)
             counts["ustensiles"] = seed_utensils(session)
             print("Catalogue à jour : " + ", ".join(f"{n} {label}" for label, n in counts.items()))
+        elif args.command == "purge":
+            from app.maintenance import purge
+
+            print("Purge : " + ", ".join(f"{n} {label}" for label, n in purge(session).items()))
         elif args.command == "rematch-ingredients":
             from app.services.recipes import rematch_ingredients
 

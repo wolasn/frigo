@@ -1,11 +1,17 @@
 """Point d'entrée de l'application FastAPI."""
 
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import DBAPIError, OperationalError
 
+from app import scheduler
 from app.api import (
+    admin,
     agenda,
     auth,
     catalog,
@@ -17,19 +23,42 @@ from app.api import (
     shopping,
     utensils,
 )
-from app.db import check_database
+from app.db import DatabaseNotConfigured, check_database
 
-app = FastAPI(title="Frigo & Repas", docs_url="/api/docs", openapi_url="/api/openapi.json")
-app.include_router(auth.router)
-app.include_router(catalog.router)
-app.include_router(inventory.router)
-app.include_router(recipes.router)
-app.include_router(utensils.router)
-app.include_router(agenda.router)
-app.include_router(shopping.router)
-app.include_router(sharing.router)
-app.include_router(notifications.router)
-app.include_router(preferences.router)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s : %(message)s")
+logger = logging.getLogger("frigo")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    scheduler.start()
+    yield
+    scheduler.stop()
+
+
+app = FastAPI(title="Frigo & Repas", docs_url="/api/docs", openapi_url="/api/openapi.json", lifespan=lifespan)
+for module in (auth, catalog, inventory, recipes, utensils, agenda, shopping, sharing, notifications, preferences, admin):
+    app.include_router(module.router)
+
+UNAVAILABLE = "Service momentanément indisponible. Réessaie plus tard ou contacte l'administrateur."
+
+
+@app.exception_handler(DatabaseNotConfigured)
+async def database_not_configured(_request: Request, _error: DatabaseNotConfigured) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": UNAVAILABLE})
+
+
+@app.exception_handler(OperationalError)
+async def database_unreachable(_request: Request, error: OperationalError) -> JSONResponse:
+    logger.error("Base injoignable : %s", type(error.orig).__name__ if error.orig else type(error).__name__)
+    return JSONResponse(status_code=503, content={"detail": UNAVAILABLE})
+
+
+@app.exception_handler(DBAPIError)
+async def database_error(_request: Request, error: DBAPIError) -> JSONResponse:
+    if error.connection_invalidated:
+        return JSONResponse(status_code=503, content={"detail": UNAVAILABLE})
+    raise error
 
 
 @app.get("/api/health")

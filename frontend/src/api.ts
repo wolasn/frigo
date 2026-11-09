@@ -221,6 +221,24 @@ export type Preferences = {
   basics: { food_id: string; name: string; removable: boolean }[];
 };
 
+export type DbStatus = {
+  status: "ok" | "down" | "unknown";
+  cause: string | null;
+  since: string | null;
+  last_check: string | null;
+  last_incident_start: string | null;
+  last_incident_end: string | null;
+  email_error: string | null;
+  live?: string | null;
+};
+
+export async function statusWithKey(key: string): Promise<DbStatus> {
+  const response = await fetch("/api/admin/status", { headers: { "X-Status-Key": key } });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new ApiError(response.status, (data as { detail?: string } | null)?.detail ?? "Accès refusé.");
+  return data as DbStatus;
+}
+
 export type MetaUpdate = Partial<{ rating: number | null; comment: string | null; is_favorite: boolean; is_pinned: boolean }>;
 
 function query(params: Record<string, string | number | boolean | string[] | undefined>): string {
@@ -339,6 +357,9 @@ export const api = {
   changePassword: (current_password: string, new_password: string) =>
     request<void>("POST", "/api/auth/password", { current_password, new_password }),
   deleteAccount: (password: string) => request<void>("DELETE", "/api/auth/me", { password }),
+
+  dbStatus: () => request<DbStatus>("GET", "/api/admin/db-status"),
+  checkDbNow: () => request<DbStatus>("POST", "/api/admin/check-now"),
 
   utensils: () => request<Utensil[]>("GET", "/api/utensils"),
   setUtensilOwned: (id: string, owned: boolean) => request<Utensil>("PUT", `/api/utensils/${id}/owned`, { owned }),

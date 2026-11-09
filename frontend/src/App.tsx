@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, ApiError, type User } from "./api";
+import { UnavailableScreen } from "./components/StatusViews";
 import AuthPage from "./pages/AuthPage";
 import HomePage from "./pages/HomePage";
 
@@ -19,11 +20,7 @@ export default function App() {
     return <p className="p-8 text-stone-500">Chargement…</p>;
   }
   if (state.status === "error") {
-    return (
-      <p className="p-8 text-stone-600 dark:text-stone-400">
-        Le service est momentanément indisponible. Réessaie dans un instant, ou contacte l'administrateur.
-      </p>
-    );
+    return <UnavailableScreen />;
   }
   if (state.status === "anonymous") {
     return <AuthPage onAuthenticated={(user) => setState({ status: "ready", user })} />;

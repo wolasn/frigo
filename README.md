@@ -59,6 +59,32 @@ docker compose run --rm -u root -v "${PWD}/backend:/app" app alembic check
 
 Toujours relire une migration générée avant de l'appliquer.
 
+## Tâches planifiées
+
+| Quand | Quoi | Où |
+| --- | --- | --- |
+| Chaque jour à 6 h | Vérification de la base (3 essais), e-mail au super-administrateur si elle est bloquée, puis au retour | Conteneur `app` |
+| Chaque nuit à 3 h 30 | Purge : retraits de plus d'un mois, articles archivés, analyses photo de plus de 30 jours, sessions expirées | Conteneur `app` |
+| Lundi et jeudi à 3 h | Sauvegarde compressée (`pg_dump` 17, schéma `public`) dans `./backups`, les 2 plus récentes gardées | Conteneur `backup` |
+
+Commandes utiles :
+
+```
+docker compose exec app python -m app.cli check-db       # vérifier la base maintenant
+docker compose exec app python -m app.cli test-email     # tester l'e-mail d'alerte
+docker compose exec app python -m app.cli purge          # lancer la purge maintenant
+docker compose exec backup sh /usr/local/bin/backup.sh   # sauvegarder maintenant
+```
+
+Restaurer une sauvegarde (écrase les tables du schéma `public`) :
+
+```
+docker compose exec backup sh -c 'pg_restore --clean --if-exists --no-owner -d "$(cat /run/secrets/database_url)" /backups/<fichier>.dump'
+```
+
+Quand la base est bloquée, la page affiche « Service momentanément indisponible ». Le lien « Accès
+administrateur » demande la clé `status_page_key` et montre la cause et l'heure de la panne.
+
 ## Tests
 
 ```

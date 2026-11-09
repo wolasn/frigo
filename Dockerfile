@@ -20,7 +20,8 @@ RUN pip install --no-cache-dir -r requirements.txt \
 COPY backend/ ./
 COPY --from=frontend /frontend/dist ./static
 
-RUN useradd --create-home appuser
+RUN useradd --create-home appuser \
+    && mkdir -p /app/state && chown appuser:appuser /app/state
 USER appuser
 
 EXPOSE 8000

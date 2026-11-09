@@ -1,6 +1,6 @@
-# Lancement local : docker compose up --build
+# Lancement local : docker compose up --build -d
 # Les secrets sont des fichiers du dossier ./secrets (jamais versionnés),
-# montés dans le conteneur sous /run/secrets/<nom>.
+# montés dans les conteneurs sous /run/secrets/<nom>.
 services:
   app:
     build:
@@ -9,10 +9,44 @@ services:
         INSTALL_DEV: "true"
     ports:
       - "8000:8000"
+    environment:
+      APP_TIMEZONE: Europe/Paris
     secrets:
       - database_url
+      - smtp_sender
+      - smtp_password
+      - admin_email
+      - status_page_key
+    volumes:
+      - app_state:/app/state  # état de la surveillance de la base (doit survivre à une panne de la base)
     restart: unless-stopped
+
+  # Sauvegarde compressée de la base le lundi et le jeudi à 3 h ; les 2 plus récentes sont gardées.
+  backup:
+    image: postgres:17-alpine
+    environment:
+      TZ: Europe/Paris
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - echo '0 3 * * 1,4 sh /usr/local/bin/backup.sh >> /backups/backup.log 2>&1' | crontab - && exec crond -f -l 8
+    secrets:
+      - database_url
+    volumes:
+      - ./backup/backup.sh:/usr/local/bin/backup.sh:ro
+      - ./backups:/backups
+    restart: unless-stopped
+
+volumes:
+  app_state:
 
 secrets:
   database_url:
     file: ./secrets/database_url
+  smtp_sender:
+    file: ./secrets/smtp_sender
+  smtp_password:
+    file: ./secrets/smtp_password
+  admin_email:
+    file: ./secrets/admin_email
+  status_page_key:
+    file: ./secrets/status_page_key

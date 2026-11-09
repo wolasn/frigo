@@ -8,8 +8,13 @@ et Docker les monte dans le conteneur sous `/run/secrets/<nom>`.
 | --- | --- | --- |
 | `database_url` | URL de connexion PostgreSQL Supabase (`postgresql://...`) | Maintenant |
 | `anthropic_api_key` | Clé d'API Claude | Étape photo |
-| `smtp_sender`, `smtp_password`, `admin_email` | Compte Gmail d'envoi et adresse du super-administrateur | Surveillance de la base |
-| `status_page_key` | Clé de la page de statut | Surveillance de la base |
+| `smtp_sender` | Adresse Gmail qui envoie les alertes | Maintenant |
+| `smtp_password` | Mot de passe d'application de ce compte Gmail (16 lettres, espaces acceptés) | Maintenant |
+| `admin_email` | Adresse du super-administrateur qui reçoit les alertes | Maintenant |
+| `status_page_key` | Clé longue et aléatoire pour la page de statut (vide = page désactivée) | Maintenant |
+
+Docker Compose exige que chaque fichier existe, même vide. Après les avoir remplis :
+`docker compose up -d --force-recreate`, puis `docker compose exec app python -m app.cli test-email`.
 
 Un fichier vide équivaut à un secret absent : l'application démarre quand même
 et le signale (par exemple « base de données non configurée »).
