@@ -28,6 +28,10 @@ export default function MealsPage() {
   const [searchResults, setSearchResults] = useState<RecipeCard[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [askAi, setAskAi] = useState(false);
+  const [aiWish, setAiWish] = useState("");
+  const [aiCount, setAiCount] = useState(2);
+  const [resultsLabel, setResultsLabel] = useState("Résultats Marmiton");
   const [error, setError] = useState<string | null>(null);
 
   const loadLeftovers = useCallback((list: Inventory[]) => {
@@ -79,10 +83,34 @@ export default function MealsPage() {
     try {
       const result = await api.discoverRecipes();
       setSearchResults(result.recipes);
+      setResultsLabel("Résultats Marmiton");
       setSearchText(result.queries.join(", "));
       load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Recherche impossible.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function generateWithAi(event: FormEvent) {
+    event.preventDefault();
+    setError(null);
+    setBusy("L'IA invente des recettes avec ton inventaire… (jusqu'à une minute)");
+    try {
+      const cards = await api.generateRecipes({
+        count: aiCount,
+        servings,
+        max_purchases: mode === "inventory" ? 0 : maxPurchases === "" ? null : Number(maxPurchases),
+        diet,
+        wish: aiWish.trim() || undefined,
+      });
+      setSearchResults(cards);
+      setResultsLabel("Recettes inventées par l'IA");
+      setAskAi(false);
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Génération impossible.");
     } finally {
       setBusy(null);
     }
@@ -97,6 +125,7 @@ export default function MealsPage() {
     setBusy(isUrl ? "Import de la recette…" : "Recherche sur Marmiton…");
     try {
       setSearchResults(isUrl ? [await api.importRecipe(text)] : await api.searchRecipes(text));
+      setResultsLabel("Résultats Marmiton");
       load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Recherche impossible.");
@@ -228,13 +257,49 @@ export default function MealsPage() {
             <button className={primaryButton} onClick={discover} disabled={busy !== null}>
               Trouver avec mes ingrédients
             </button>
+            <button
+              className="rounded-lg bg-violet-600 px-4 py-2 font-medium text-white transition hover:bg-violet-700 disabled:opacity-60"
+              onClick={() => setAskAi(true)}
+              disabled={busy !== null}
+            >
+              Inventer avec l'IA
+            </button>
           </div>
+          {askAi && (
+            <form
+              onSubmit={generateWithAi}
+              className="mb-6 grid gap-3 rounded-xl border border-violet-300 bg-violet-50 p-4 sm:grid-cols-[1fr_auto_auto] dark:border-violet-900 dark:bg-stone-900"
+            >
+              <input
+                className={inputClass}
+                placeholder="Une envie ? (facultatif : soupe, plat rapide, sans four…)"
+                value={aiWish}
+                onChange={(e) => setAiWish(e.target.value)}
+                maxLength={200}
+              />
+              <select className={inputClass} value={aiCount} onChange={(e) => setAiCount(Number(e.target.value))} aria-label="Nombre de recettes">
+                {[1, 2, 3].map((n) => (
+                  <option key={n} value={n}>
+                    {n} recette{n > 1 ? "s" : ""}
+                  </option>
+                ))}
+              </select>
+              <button className="rounded-lg bg-violet-600 px-4 py-2 font-medium text-white hover:bg-violet-700 disabled:opacity-60" disabled={busy !== null}>
+                Inventer
+              </button>
+              <p className="text-xs text-stone-600 sm:col-span-3 dark:text-stone-400">
+                L'IA part de ton inventaire (aliments bientôt périmés d'abord), de tes préférences et des réglages ci-dessus. Les recettes créées portent le badge IA et sont visibles par tous les utilisateurs.
+              </p>
+            </form>
+          )}
           {busy && <p className="mb-4 text-sm text-stone-600 dark:text-stone-400" role="status">{busy}</p>}
 
           {searchResults && (
             <section className="mb-8">
               <div className="mb-2 flex items-center justify-between">
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-stone-500">Résultats Marmiton · {searchResults.length}</h2>
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-stone-500">
+                  {resultsLabel} · {searchResults.length}
+                </h2>
                 <button className="text-sm text-stone-500 hover:underline" onClick={() => setSearchResults(null)}>
                   Masquer
                 </button>

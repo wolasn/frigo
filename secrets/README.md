@@ -7,7 +7,7 @@ et Docker les monte dans le conteneur sous `/run/secrets/<nom>`.
 | Fichier | Contenu | Utilisé à partir de |
 | --- | --- | --- |
 | `database_url` | URL de connexion PostgreSQL Supabase (`postgresql://...`) | Maintenant |
-| `anthropic_api_key` | Clé d'API Claude | Étape photo |
+| `anthropic_api_key` | Clé d'API Claude (console.anthropic.com → API Keys), pour les recettes IA puis l'analyse photo | Maintenant |
 | `smtp_sender` | Adresse Gmail qui envoie les alertes | Maintenant |
 | `smtp_password` | Mot de passe d'application de ce compte Gmail (16 lettres, espaces acceptés) | Maintenant |
 | `admin_email` | Adresse du super-administrateur qui reçoit les alertes | Maintenant |

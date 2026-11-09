@@ -19,9 +19,16 @@ from app.models import (
     User,
     Utensil,
 )
-from app.models.enums import ItemKind, RecipeSource, RecipeStatus, ReferenceUnit
-from app.services.health import score_from_marmiton
-from app.services.ingredients import FoodMatcher, parse_ingredient, to_reference_quantity
+from app.models.enums import Difficulty, ItemKind, RecipeSource, RecipeStatus, ReferenceUnit
+from app.services.health import score_from_foods, score_from_marmiton
+from app.services.ingredients import (
+    FoodMatcher,
+    ParsedIngredient,
+    normalize,
+    parse_ingredient,
+    to_reference_quantity,
+    tokens,
+)
 from app.services.marmiton import (
     MarmitonClient,
     MarmitonError,
@@ -122,6 +129,81 @@ def build_marmiton_recipe(session: Session, data: MarmitonRecipe, matcher: FoodM
 
     fv_share = float(fv_g / total_g * 100) if total_g else 0.0
     recipe.health_score, recipe.nutrition_per_serving = score_from_marmiton(data.nutrition, fv_share)
+    session.flush()
+    return recipe
+
+
+def _match_utensil(name: str, utensils: list[Utensil]) -> Utensil | None:
+    wanted = normalize(name)
+    for utensil in utensils:
+        if normalize(utensil.name) == wanted:
+            return utensil
+    wanted_tokens = tokens(name)
+    candidates = [u for u in utensils if tokens(u.name) and tokens(u.name) <= wanted_tokens]
+    return max(candidates, key=lambda u: len(tokens(u.name)), default=None)
+
+
+def build_ai_recipe(session: Session, generated, author: User, matcher: FoodMatcher) -> Recipe:
+    """Enregistre une recette proposée par l'IA : visible par tous, avec le badge IA."""
+    recipe = Recipe(
+        title=generated.title,
+        source=RecipeSource.AI,
+        status=RecipeStatus.COMPLETE,
+        author_user_id=author.id,  # simple trace : la recette est visible par tous
+        servings=generated.servings,
+        prep_minutes=generated.prep_minutes or None,
+        cook_minutes=generated.cook_minutes or None,
+        difficulty=Difficulty(generated.difficulty),
+    )
+    session.add(recipe)
+    session.flush()
+
+    matched: list[tuple[Food, RecipeIngredient]] = []
+    unmatched = 0
+    for position, item in enumerate(generated.ingredients):
+        quantity = Decimal(str(item["quantity"])) if item["unit"] != "aucune" and item["quantity"] > 0 else None
+        unit = None if item["unit"] in ("piece", "aucune") else item["unit"]
+        food = matcher.match(item["name"])
+        parsed = ParsedIngredient(raw=item["name"], quantity=quantity, unit=unit, name=item["name"])
+        quantity_ref = to_reference_quantity(parsed, food) if food else None
+        label = item["name"] if quantity is None else f"{quantity.normalize():f}".replace(".", ",") + (
+            f" {unit}" if unit else "") + f" {item['name']}"
+        row = RecipeIngredient(
+            recipe_id=recipe.id, position=position, raw_text=label[:300], food_id=food.id if food else None,
+            quantity=quantity, unit=item["unit"] if item["unit"] != "aucune" else None,
+            quantity_ref=quantity_ref if quantity_ref and quantity_ref > 0 else None, is_optional=item["optional"],
+        )
+        session.add(row)
+        if food:
+            matched.append((food, row))
+        elif not item["optional"]:
+            unmatched += 1
+
+    for position, text in enumerate(generated.steps):
+        session.add(RecipeStep(recipe_id=recipe.id, position=position, instruction=text))
+
+    standard = list(session.scalars(select(Utensil).where(Utensil.owner_user_id.is_(None))))
+    chosen: dict = {}
+    for name in generated.utensils:
+        utensil = _match_utensil(name, standard)
+        if utensil:
+            chosen[utensil.id] = None
+    by_name = {u.name: u for u in standard}
+    for name, group in detect_utensils(generated.steps):  # complète ce que l'IA aurait oublié
+        if name in by_name:
+            chosen.setdefault(by_name[name].id, group)
+    for utensil_id, group in chosen.items():
+        session.add(RecipeUtensil(recipe_id=recipe.id, utensil_id=utensil_id, alternative_group=group))
+
+    main = [food for food, row in matched if not row.is_optional]
+    recipe.is_vegetarian = all(f.is_vegetarian for f in main) and (unmatched == 0 or generated.is_vegetarian)
+    recipe.is_vegan = recipe.is_vegetarian and all(f.is_vegan for f in main) and (unmatched == 0 or generated.is_vegan)
+    weights = []
+    for food, row in matched:
+        weight = _ingredient_weight_g(food, row.quantity_ref)
+        if weight and not row.is_optional:
+            weights.append((food, float(weight)))
+    recipe.health_score, recipe.nutrition_per_serving = score_from_foods(weights, recipe.servings)
     session.flush()
     return recipe
 

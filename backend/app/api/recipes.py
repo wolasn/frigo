@@ -6,12 +6,14 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 
 from app.api.deps import CurrentUser, DbSession
 from app.clock import today
 from app.models import Recipe, RecipeStep, UserPreferences, UserRecipeMeta
 from app.models.enums import Diet, Difficulty, RecipeSource, RecipeStatus
+from app.services.ai_recipes import AiError, AiNotConfigured, GenerationRequest
+from app.services.ai_recipes import generate as ai_generate
 from app.services.marmiton import MarmitonError
 from app.services.proposals import (
     Evaluation,
@@ -262,6 +264,104 @@ def search_recipes(body: SearchIn, session: DbSession, user: CurrentUser) -> lis
     except MarmitonError as error:
         raise _marmiton_error(error) from None
     return _cards_for(session, user, ids)
+
+
+class GenerateIn(BaseModel):
+    count: int = Field(default=2, ge=1, le=3)
+    servings: int | None = Field(default=None, ge=1, le=999)
+    max_purchases: int | None = Field(default=2, ge=0, le=99)  # vide = illimité
+    diet: Diet | None = None
+    wish: str | None = Field(default=None, max_length=200)
+
+
+AI_DAILY_LIMIT = 15  # recettes IA par utilisateur et par jour : chaque génération coûte quelques centimes
+
+
+def _generation_request(session, user, body: GenerateIn) -> GenerationRequest:
+    from datetime import timedelta as _td
+    from decimal import Decimal as _D
+
+    from app.models import Food, InventoryItem, UserExcludedFood, UserInfiniteFood, UserUtensil, Utensil
+    from app.models.enums import DateType, ExclusionReason, ItemKind
+    from app.services.planning import reserved_by_item
+    from app.services.shopping import display_quantity
+
+    options = _options(session, user, body.servings, None, None, None, body.diet, False, None)
+    items = session.execute(
+        select(InventoryItem, Food).join(Food, Food.id == InventoryItem.food_id).where(
+            InventoryItem.inventory_id.in_(options.inventory_ids), InventoryItem.archived_at.is_(None),
+            InventoryItem.kind == ItemKind.INGREDIENT,
+        )
+    ).all()
+    reserved = reserved_by_item(session, [i.id for i, _ in items])
+    # Par aliment : quantité disponible (hors réservations) et date de péremption la plus proche.
+    totals: dict = {}
+    soonest: dict = {}
+    foods: dict = {}
+    for item, food in items:
+        if item.expires_on < today() and item.date_type != DateType.BEST_BEFORE:
+            continue
+        available = item.quantity - reserved.get(item.id, _D(0))
+        if available <= 0:
+            continue
+        totals[food.id] = totals.get(food.id, _D(0)) + available
+        soonest[food.id] = min(soonest.get(food.id, item.expires_on), item.expires_on)
+        foods[food.id] = food
+    lines = []
+    for food_id in sorted(totals, key=lambda f: soonest[f]):
+        food, total = foods[food_id], totals[food_id]
+        quantity, unit = display_quantity(food, total)
+        unit_label = {"piece": "pièce(s)", "l": "L"}.get(unit, unit)
+        days = (soonest[food_id] - today()).days
+        lines.append(f"{food.name} : {quantity:f} {unit_label}".replace(".", ",") +
+                     (f" (expire dans {days} j)" if days <= 7 else ""))
+
+    exclusions = session.execute(
+        select(Food.name, UserExcludedFood.reason).join(Food, Food.id == UserExcludedFood.food_id)
+        .where(UserExcludedFood.user_id == user.id)
+    ).all()
+    basics = session.scalars(select(Food.name).where(
+        (Food.is_always_infinite.is_(True))
+        | Food.id.in_(select(UserInfiniteFood.food_id).where(UserInfiniteFood.user_id == user.id))
+    )).all()
+    utensils = session.scalars(select(Utensil.name).join(UserUtensil, UserUtensil.utensil_id == Utensil.id)
+                               .where(UserUtensil.user_id == user.id)).all()
+    return GenerationRequest(
+        count=body.count, servings=options.servings,
+        max_purchases=body.max_purchases,
+        diet=options.diet.value, inventory=lines, basics=list(basics),
+        allergies=[n for n, r in exclusions if r == ExclusionReason.ALLERGY],
+        dislikes=[n for n, r in exclusions if r == ExclusionReason.DISLIKE],
+        utensils=list(utensils), wish=(body.wish or "").strip() or None,
+    )
+
+
+@router.post("/recipes/generate")
+def generate_recipes(body: GenerateIn, session: DbSession, user: CurrentUser) -> list[RecipeCard]:
+    """Recettes inventées par l'IA à partir de l'inventaire ; badge IA, visibles par tous."""
+    from datetime import datetime as _dt
+
+    from app.clock import APP_TIMEZONE
+    from app.services.ingredients import FoodMatcher
+    from app.services.recipes import build_ai_recipe
+
+    start_of_day = _dt.combine(today(), _dt.min.time(), tzinfo=APP_TIMEZONE)
+    done_today = session.scalar(select(func.count()).select_from(Recipe).where(
+        Recipe.source == RecipeSource.AI, Recipe.author_user_id == user.id, Recipe.created_at >= start_of_day))
+    if done_today + body.count > AI_DAILY_LIMIT:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
+                            detail=f"Limite atteinte : {AI_DAILY_LIMIT} recettes IA par jour. Réessaie demain.")
+    try:
+        generated = ai_generate(_generation_request(session, user, body))
+    except AiNotConfigured as error:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from None
+    except AiError as error:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=str(error)) from None
+
+    matcher = FoodMatcher(session)
+    ids = [build_ai_recipe(session, recipe, user, matcher).id for recipe in generated]
+    session.commit()
+    return _cards_for(session, user, ids, body.servings)
 
 
 @router.post("/recipes/discover")

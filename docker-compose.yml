@@ -17,6 +17,7 @@ services:
       - smtp_password
       - admin_email
       - status_page_key
+      - anthropic_api_key
     volumes:
       - app_state:/app/state  # état de la surveillance de la base (doit survivre à une panne de la base)
     restart: unless-stopped
@@ -50,3 +51,5 @@ secrets:
     file: ./secrets/admin_email
   status_page_key:
     file: ./secrets/status_page_key
+  anthropic_api_key:
+    file: ./secrets/anthropic_api_key

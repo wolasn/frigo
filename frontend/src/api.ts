@@ -337,6 +337,8 @@ export const api = {
   updateMeta: (id: string, body: MetaUpdate) => request<RecipeCard>("PUT", `/api/recipes/${id}/meta`, body),
   importRecipe: (url: string) => request<RecipeCard>("POST", "/api/recipes/import", { url }),
   searchRecipes: (q: string) => request<RecipeCard[]>("POST", "/api/recipes/search", { query: q }),
+  generateRecipes: (body: { count: number; servings: number; max_purchases: number | null; diet: string; wish?: string }) =>
+    request<RecipeCard[]>("POST", "/api/recipes/generate", body),
   discoverRecipes: () => request<{ queries: string[]; recipes: RecipeCard[] }>("POST", "/api/recipes/discover"),
 
   agenda: (start: string, end: string) => request<Meal[]>("GET", `/api/agenda?${query({ start, end })}`),
