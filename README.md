@@ -35,6 +35,17 @@ indicatives et les conversions d'unités (relançable sans créer de doublons) :
 docker compose exec app python -m app.cli seed-catalogue
 ```
 
+Après avoir enrichi le catalogue, refaire le rapprochement des ingrédients des recettes Marmiton déjà importées :
+
+```
+docker compose exec app python -m app.cli rematch-ingredients
+```
+
+## Recettes Marmiton
+
+Les recettes sont lues sur Marmiton (données structurées des fiches), au plus une requête toutes les 1,5 s,
+et gardées en cache dans la base : une recette n'est téléchargée qu'une fois, une recherche est réutilisée 7 jours.
+
 ## Base de données (migrations Alembic)
 
 Les modèles sont dans `backend/app/models/`, les migrations dans `backend/alembic/versions/`.

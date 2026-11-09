@@ -92,6 +92,67 @@ export type ItemUpdate = Partial<{
   leftover_name: string;
 }>;
 
+export type RecipeCard = {
+  id: string;
+  title: string;
+  source: "marmiton" | "ai" | "user";
+  image_url: string | null;
+  external_url: string | null;
+  base_servings: number;
+  prep_minutes: number | null;
+  cook_minutes: number | null;
+  difficulty: "easy" | "medium" | "hard" | null;
+  is_vegan: boolean;
+  is_vegetarian: boolean;
+  health_score: number | null;
+  rating: number | null;
+  comment: string | null;
+  is_favorite: boolean;
+  is_pinned: boolean;
+  times_cooked: number;
+  servings: number;
+  missing: string[];
+  expiring_used: string[];
+  missing_utensils: string[];
+  disliked: string[];
+};
+
+export type IngredientStatus = "ok" | "partial" | "missing" | "unknown" | "seasoning" | "infinite";
+
+export type RecipeDetail = RecipeCard & {
+  ingredients: { id: string; name: string; raw_text: string; amount: string | null; status: IngredientStatus; expiring: boolean; disliked: boolean }[];
+  utensils: { name: string; owned: boolean; optional: boolean }[];
+  steps: string[];
+  nutrition: {
+    per_serving?: Record<string, number | null>;
+    points?: { label: string; points: number }[];
+    serving_g?: number;
+  } | null;
+};
+
+export type ProposalQuery = {
+  servings: number;
+  mode: "inventory" | "purchases";
+  max_purchases?: number;
+  diet: "none" | "vegetarian" | "vegan";
+  include_missing_utensils: boolean;
+  inventory_ids?: string[];
+};
+
+export type Utensil = { id: string; name: string; category: "cooking" | "preparation" | "container"; owned: boolean; is_custom: boolean };
+
+export type MetaUpdate = Partial<{ rating: number | null; comment: string | null; is_favorite: boolean; is_pinned: boolean }>;
+
+function query(params: Record<string, string | number | boolean | string[] | undefined>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined) continue;
+    if (Array.isArray(value)) value.forEach((v) => search.append(key, v));
+    else search.append(key, String(value));
+  }
+  return search.toString();
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -142,4 +203,17 @@ export const api = {
     request<Food>("POST", "/api/foods", { name, category_id, reference_unit }),
   categories: () => request<Category[]>("GET", "/api/food-categories"),
   basics: () => request<Food[]>("GET", "/api/basics"),
+
+  proposals: (q: ProposalQuery) => request<RecipeCard[]>("GET", `/api/proposals?${query(q)}`),
+  favorites: () => request<RecipeCard[]>("GET", "/api/recipes/favorites"),
+  recipe: (id: string, servings?: number) => request<RecipeDetail>("GET", `/api/recipes/${id}?${query({ servings })}`),
+  updateMeta: (id: string, body: MetaUpdate) => request<RecipeCard>("PUT", `/api/recipes/${id}/meta`, body),
+  importRecipe: (url: string) => request<RecipeCard>("POST", "/api/recipes/import", { url }),
+  searchRecipes: (q: string) => request<RecipeCard[]>("POST", "/api/recipes/search", { query: q }),
+  discoverRecipes: () => request<{ queries: string[]; recipes: RecipeCard[] }>("POST", "/api/recipes/discover"),
+
+  utensils: () => request<Utensil[]>("GET", "/api/utensils"),
+  setUtensilOwned: (id: string, owned: boolean) => request<Utensil>("PUT", `/api/utensils/${id}/owned`, { owned }),
+  createUtensil: (name: string, category: Utensil["category"]) => request<Utensil>("POST", "/api/utensils", { name, category }),
+  deleteUtensil: (id: string) => request<void>("DELETE", `/api/utensils/${id}`),
 };

@@ -3,6 +3,7 @@
     python -m app.cli super-admin <identifiant>             nomme le super-administrateur
     python -m app.cli super-admin <identifiant> --replace   remplace l'actuel
     python -m app.cli seed-catalogue                         charge le catalogue de départ
+    python -m app.cli rematch-ingredients                    refait le rapprochement des ingrédients
 """
 
 import argparse
@@ -45,6 +46,7 @@ def main(argv: list[str] | None = None) -> None:
     promote.add_argument("username")
     promote.add_argument("--replace", action="store_true", help="remplacer le super-administrateur actuel")
     commands.add_parser("seed-catalogue", help="charger ou mettre à jour le catalogue de départ")
+    commands.add_parser("rematch-ingredients", help="refaire le rapprochement des ingrédients Marmiton")
     args = parser.parse_args(argv)
 
     with Session(get_engine()) as session:
@@ -52,9 +54,15 @@ def main(argv: list[str] | None = None) -> None:
             print(set_super_admin(session, args.username, args.replace))
         elif args.command == "seed-catalogue":
             from app.seed.catalogue import seed_catalogue
+            from app.seed.utensils import seed_utensils
 
             counts = seed_catalogue(session)
+            counts["ustensiles"] = seed_utensils(session)
             print("Catalogue à jour : " + ", ".join(f"{n} {label}" for label, n in counts.items()))
+        elif args.command == "rematch-ingredients":
+            from app.services.recipes import rematch_ingredients
+
+            print(f"Ingrédients mis à jour : {rematch_ingredients(session)}")
 
 
 if __name__ == "__main__":

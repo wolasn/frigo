@@ -124,6 +124,9 @@ FOODS = [
     ("Quinoa", "Féculents et céréales", "g", None, V, VG, {}),
     ("Farine de blé", "Féculents et céréales", "g", None, V, VG, {}),
     ("Flocons d'avoine", "Féculents et céréales", "g", None, V, VG, {}),
+    ("Pâte brisée", "Féculents et céréales", "piece", 230, V, False, {"fridge": 21, "freezer": 90}),
+    ("Pâte feuilletée", "Féculents et céréales", "piece", 230, V, False, {"fridge": 21, "freezer": 90}),
+    ("Pâte à pizza", "Féculents et céréales", "piece", 260, V, VG, {"fridge": 14, "freezer": 90}),
     ("Lentilles vertes", "Légumineuses", "g", None, V, VG, {}),
     ("Lentilles corail", "Légumineuses", "g", None, V, VG, {}),
     ("Pois chiches secs", "Légumineuses", "g", None, V, VG, {}),
@@ -168,6 +171,45 @@ FOODS = [
     # Boissons
     ("Jus d'orange", "Boissons", "ml", None, V, VG, {}),
 ]
+
+# Autres noms utilisés dans les recettes, pour reconnaître les ingrédients Marmiton.
+ALIASES = {
+    "Œuf": ["oeuf", "oeufs", "jaune d'oeuf", "jaunes d'oeufs", "blanc d'oeuf", "blancs d'oeufs"],
+    "Pomme de terre": ["pommes de terre", "patates"],
+    "Ail (gousse)": ["ail", "gousse d'ail", "gousses d'ail"],
+    "Bœuf haché": ["viande hachée", "boeuf haché", "steak haché"],
+    "Steak de bœuf": ["boeuf", "bœuf"],
+    "Emmental râpé": ["emmental", "gruyère", "gruyère râpé", "fromage râpé"],
+    "Crème liquide": ["crème fraîche liquide", "crème entière", "crème liquide entière"],
+    "Crème fraîche": ["crème fraîche épaisse", "crème épaisse"],
+    "Lait demi-écrémé": ["lait"],
+    "Pâtes": ["spaghetti", "spaghettis", "tagliatelles", "penne", "coquillettes", "macaronis", "fusilli", "lasagnes"],
+    "Riz": ["riz basmati", "riz long", "riz rond", "riz arborio"],
+    "Farine de blé": ["farine"],
+    "Sucre": ["sucre en poudre", "sucre semoule", "sucre blanc"],
+    "Huile d'olive": ["huile"],
+    "Noix de muscade": ["muscade"],
+    "Poivre": ["poivre noir", "poivre du moulin"],
+    "Sel": ["sel fin", "gros sel", "fleur de sel"],
+    "Bouillon de légumes (cube)": ["bouillon", "cube de bouillon", "bouillon cube", "bouillon de volaille"],
+    "Tomates concassées (conserve)": ["tomates concassées", "coulis de tomate", "pulpe de tomate", "sauce tomate"],
+    "Concentré de tomate": ["concentré de tomates"],
+    "Lardons": ["lardons fumés", "allumettes de lardons"],
+    "Saumon": ["pavé de saumon", "pavés de saumon", "filet de saumon"],
+    "Cabillaud": ["dos de cabillaud", "filet de cabillaud"],
+    "Blanc de poulet": ["poulet", "escalope de poulet", "filet de poulet"],
+    "Salade (laitue)": ["salade", "laitue"],
+    "Champignons de Paris": ["champignons"],
+    "Fromage de chèvre": ["chèvre", "bûche de chèvre", "fromage de chèvre frais"],
+    "Mozzarella": ["boule de mozzarella"],
+    "Yaourt nature": ["yaourt", "yaourts"],
+    "Herbes de Provence": ["thym", "romarin"],
+    "Chocolat noir": ["chocolat", "chocolat pâtissier"],
+    "Courge butternut": ["butternut", "courge"],
+    "Jus d'orange": ["jus d'orange pressé"],
+    "Baguette": ["pain"],
+    "Thon (conserve)": ["thon", "thon au naturel"],
+}
 
 # L'eau : toujours disponible, en quantité infinie, pour tous.
 WATER = ("Eau", "Boissons", "ml")

@@ -3,9 +3,9 @@
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.models import Food, FoodCategory, FoodShelfLife, UnitConversion
+from app.models import Food, FoodAlias, FoodCategory, FoodShelfLife, UnitConversion
 from app.models.enums import ReferenceUnit, StorageType
-from app.seed.catalogue_data import CATEGORIES, CATEGORY_SHELF_LIFE, FOODS, GENERIC_CONVERSIONS, WATER
+from app.seed.catalogue_data import ALIASES, CATEGORIES, CATEGORY_SHELF_LIFE, FOODS, GENERIC_CONVERSIONS, WATER
 
 
 def _shelf_life_rows(durations: dict[str, int]) -> list[tuple[StorageType, bool, int]]:
@@ -52,6 +52,12 @@ def seed_catalogue(session: Session) -> dict[str, int]:
         session.execute(delete(FoodShelfLife).where(FoodShelfLife.food_id == food.id))
         for storage, opened, days in _shelf_life_rows(durations):
             session.add(FoodShelfLife(food_id=food.id, storage_type=storage, is_opened=opened, days=days))
+
+    for food_name, aliases in {**ALIASES, WATER[0]: ["eau"]}.items():
+        food = foods[food_name]
+        session.execute(delete(FoodAlias).where(FoodAlias.food_id == food.id))
+        for alias in dict.fromkeys(a.lower() for a in aliases):
+            session.add(FoodAlias(food_id=food.id, alias=alias))
 
     conversions = {
         c.from_unit: c for c in session.scalars(select(UnitConversion).where(UnitConversion.food_id.is_(None)))

@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.models import Inventory, InventoryMember, StorageLocation, User, UserPreferences
 from app.models.enums import InventoryKind, MemberRole, StorageType
 from app.security import hash_password
+from app.seed.utensils import give_default_utensils
 
 DEFAULT_STORAGE_LOCATIONS = (
     ("Frigo", StorageType.FRIDGE),
@@ -49,5 +50,6 @@ def create_user(session: Session, username: str, display_name: str, password: st
         session.add(
             StorageLocation(inventory_id=inventory.id, name=name, storage_type=storage_type, position=position)
         )
+    give_default_utensils(session, user.id)
     session.flush()
     return user
