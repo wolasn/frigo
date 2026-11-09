@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import case, exists, func, or_, select
 
 from app.api.deps import CurrentUser, DbSession
-from app.models import Food, FoodAlias, FoodCategory, UserInfiniteFood
+from app.models import Food, FoodAlias, FoodCategory, InventoryItem, InventoryMember, UserInfiniteFood
 from app.models.enums import ReferenceUnit
 from app.services.units import UNITS_BY_REFERENCE
 
@@ -39,8 +39,15 @@ class FoodCreate(BaseModel):
 
 
 def visible_foods(user_id: uuid.UUID):
-    """Aliments du catalogue commun + aliments personnels de l'utilisateur."""
-    return or_(Food.owner_user_id.is_(None), Food.owner_user_id == user_id)
+    """Catalogue commun + aliments personnels de l'utilisateur + aliments personnels d'autres
+    membres présents dans un inventaire partagé dont il fait partie."""
+    shared_inventories = select(InventoryMember.inventory_id).where(InventoryMember.user_id == user_id)
+    in_shared = select(InventoryItem.food_id).where(
+        InventoryItem.inventory_id.in_(shared_inventories),
+        InventoryItem.food_id.is_not(None),
+        InventoryItem.archived_at.is_(None),  # tant qu'un article de cet aliment s'y trouve
+    )
+    return or_(Food.owner_user_id.is_(None), Food.owner_user_id == user_id, Food.id.in_(in_shared))
 
 
 def food_out(food: Food, category_name: str) -> FoodOut:

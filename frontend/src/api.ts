@@ -192,6 +192,26 @@ export type ShoppingList = { id: string; name: string; inventory_id: string; lin
 
 export type PurchasedLine = { id: string; quantity?: number; unit?: string; expires_on?: string; storage_location_id?: string };
 
+export type Role = "admin" | "contributor" | "member";
+
+export type InventoryDetail = {
+  id: string;
+  name: string;
+  kind: "personal" | "shared";
+  my_role: Role;
+  include_in_suggestions: boolean;
+  members: { user_id: string; username: string; display_name: string; role: Role; is_me: boolean }[];
+  invitations: { id: string; username: string; display_name: string }[];
+};
+
+export type MyInvitation = { id: string; inventory_id: string; inventory_name: string; invited_by: string | null; created_at: string };
+
+export type NotificationSummary = {
+  unread: number;
+  pending_invitations: number;
+  items: { id: string; type: string; message: string; created_at: string; read: boolean }[];
+};
+
 export type MetaUpdate = Partial<{ rating: number | null; comment: string | null; is_favorite: boolean; is_pinned: boolean }>;
 
 function query(params: Record<string, string | number | boolean | string[] | undefined>): string {
@@ -277,6 +297,25 @@ export const api = {
   deleteShoppingLine: (id: string) => request<void>("DELETE", `/api/shopping/${id}`),
   purchase: (lines: PurchasedLine[]) =>
     request<{ added_to_inventory: number; removed_from_list: number }>("POST", "/api/shopping/purchase", { lines }),
+
+  createSharedInventory: (name: string) => request<InventoryDetail>("POST", "/api/inventories", { name }),
+  inventoryDetail: (id: string) => request<InventoryDetail>("GET", `/api/inventories/${id}`),
+  renameInventory: (id: string, name: string) => request<InventoryDetail>("PATCH", `/api/inventories/${id}`, { name }),
+  deleteInventory: (id: string) => request<void>("DELETE", `/api/inventories/${id}`),
+  setIncludeInSuggestions: (id: string, include_in_suggestions: boolean) =>
+    request<InventoryDetail>("PUT", `/api/inventories/${id}/me`, { include_in_suggestions }),
+  invite: (id: string, username: string) => request<InventoryDetail>("POST", `/api/inventories/${id}/invitations`, { username }),
+  cancelInvitation: (id: string, invitationId: string) => request<void>("DELETE", `/api/inventories/${id}/invitations/${invitationId}`),
+  changeRole: (id: string, userId: string, role: Role) => request<InventoryDetail>("PATCH", `/api/inventories/${id}/members/${userId}`, { role }),
+  removeMember: (id: string, userId: string) => request<void>("DELETE", `/api/inventories/${id}/members/${userId}`),
+  myInvitations: () => request<MyInvitation[]>("GET", "/api/invitations"),
+  acceptInvitation: (id: string) => request<InventoryDetail>("POST", `/api/invitations/${id}/accept`),
+  declineInvitation: (id: string) => request<void>("POST", `/api/invitations/${id}/decline`),
+  addLocation: (id: string, name: string, storage_type: StorageType) =>
+    request<Location>("POST", `/api/inventories/${id}/locations`, { name, storage_type }),
+  deleteLocation: (id: string, locationId: string) => request<void>("DELETE", `/api/inventories/${id}/locations/${locationId}`),
+  notifications: () => request<NotificationSummary>("GET", "/api/notifications"),
+  readNotifications: () => request<void>("POST", "/api/notifications/read-all"),
 
   utensils: () => request<Utensil[]>("GET", "/api/utensils"),
   setUtensilOwned: (id: string, owned: boolean) => request<Utensil>("PUT", `/api/utensils/${id}/owned`, { owned }),

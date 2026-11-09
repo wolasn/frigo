@@ -1,29 +1,48 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type User } from "../api";
 import AgendaPage from "./AgendaPage";
 import InventoryPage from "./InventoryPage";
 import MealsPage from "./MealsPage";
+import SharingPage from "./SharingPage";
 import ShoppingPage from "./ShoppingPage";
 import UtensilsPage from "./UtensilsPage";
 
-type SectionId = "inventory" | "meals" | "utensils" | "agenda" | "shopping";
+type SectionId = "inventory" | "meals" | "agenda" | "shopping" | "utensils" | "sharing";
 
-const SECTIONS: { id: SectionId; label: string; ready: boolean }[] = [
-  { id: "inventory", label: "Inventaire", ready: true },
-  { id: "meals", label: "Repas", ready: true },
-  { id: "agenda", label: "Agenda", ready: true },
-  { id: "shopping", label: "Courses", ready: true },
-  { id: "utensils", label: "Ustensiles", ready: true },
+const SECTIONS: { id: SectionId; label: string }[] = [
+  { id: "inventory", label: "Inventaire" },
+  { id: "meals", label: "Repas" },
+  { id: "agenda", label: "Agenda" },
+  { id: "shopping", label: "Courses" },
+  { id: "utensils", label: "Ustensiles" },
+  { id: "sharing", label: "Partages" },
 ];
 
 function initialSection(): SectionId {
   const hash = window.location.hash.slice(1) as SectionId;
-  return SECTIONS.some((s) => s.id === hash && s.ready) ? hash : "inventory";
+  return SECTIONS.some((s) => s.id === hash) ? hash : "inventory";
 }
 
 export default function HomePage({ user, onLoggedOut }: { user: User; onLoggedOut: () => void }) {
   const [section, setSection] = useState<SectionId>(initialSection);
   const [busy, setBusy] = useState(false);
+  const [badge, setBadge] = useState(0);
+
+  const badgeRequest = useRef(0);
+  const refreshBadge = useCallback(() => {
+    // Seule la réponse la plus récente compte : une réponse plus ancienne arrivée en retard est ignorée.
+    const request = ++badgeRequest.current;
+    api
+      .notifications()
+      .then((n) => request === badgeRequest.current && setBadge(n.unread + n.pending_invitations))
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    refreshBadge();
+    const timer = setInterval(refreshBadge, 60_000);
+    return () => clearInterval(timer);
+  }, [refreshBadge]);
 
   function go(id: SectionId) {
     setSection(id);
@@ -49,20 +68,21 @@ export default function HomePage({ user, onLoggedOut }: { user: User; onLoggedOu
               {SECTIONS.map((s) => (
                 <button
                   key={s.id}
-                  disabled={!s.ready}
                   onClick={() => go(s.id)}
-                  title={s.ready ? undefined : "Bientôt disponible"}
                   aria-current={section === s.id ? "page" : undefined}
                   className={
-                    "shrink-0 rounded-md px-2.5 py-1 " +
+                    "relative shrink-0 rounded-md px-2.5 py-1 " +
                     (section === s.id
                       ? "bg-stone-100 font-medium dark:bg-stone-800"
-                      : s.ready
-                        ? "text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800"
-                        : "text-stone-400 dark:text-stone-600")
+                      : "text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800")
                   }
                 >
                   {s.label}
+                  {s.id === "sharing" && badge > 0 && (
+                    <span className="ml-1 rounded-full bg-red-600 px-1.5 text-xs font-semibold text-white" aria-label={`${badge} nouveauté(s)`}>
+                      {badge}
+                    </span>
+                  )}
                 </button>
               ))}
             </nav>
@@ -88,9 +108,10 @@ export default function HomePage({ user, onLoggedOut }: { user: User; onLoggedOu
       <main className="mx-auto max-w-5xl px-4 py-6">
         {section === "inventory" && <InventoryPage />}
         {section === "meals" && <MealsPage />}
-        {section === "utensils" && <UtensilsPage />}
         {section === "agenda" && <AgendaPage />}
         {section === "shopping" && <ShoppingPage />}
+        {section === "utensils" && <UtensilsPage />}
+        {section === "sharing" && <SharingPage onChanged={refreshBadge} />}
       </main>
     </div>
   );

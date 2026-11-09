@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.catalog import visible_foods
 from app.api.deps import CurrentUser, DbSession
 from app.clock import today
 from app.models import (
@@ -285,8 +286,11 @@ def add_item(inventory_id: uuid.UUID, body: ItemCreate, session: DbSession, user
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Un reste a une date limite de consommation.")
         food, unit, entered_unit, quantity_ref = None, ItemUnit.PORTION, None, body.quantity
     else:
-        food = session.get(Food, body.food_id) if body.food_id else None
-        if food is None or (food.owner_user_id not in (None, user.id)):
+        food = (
+            session.scalar(select(Food).where(Food.id == body.food_id, visible_foods(user.id)))
+            if body.food_id else None
+        )
+        if food is None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Choisis un aliment du catalogue.")
         if food.is_always_infinite:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"« {food.name} » est toujours disponible.")
