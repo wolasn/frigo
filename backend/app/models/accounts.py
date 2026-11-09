@@ -1,0 +1,110 @@
+"""Comptes, sessions, préférences et paramètres globaux."""
+
+import uuid
+from datetime import datetime
+from typing import Any
+
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, Text, func, text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.models.base import Base, TimestampMixin, created_at_column, pg_enum, uuid_pk
+from app.models.enums import Diet, ExclusionReason, UserRole
+
+
+class User(TimestampMixin, Base):
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    username: Mapped[str] = mapped_column(Text, nullable=False)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[UserRole] = mapped_column(
+        pg_enum(UserRole, "user_role"), nullable=False, server_default=UserRole.USER.value
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        # Identifiant unique sans tenir compte de la casse.
+        Index("uq_users_username_lower", func.lower(text("username")), unique=True),
+        # Un seul super-administrateur.
+        Index("uq_users_single_super_admin", "role", unique=True, postgresql_where=text("role = 'super_admin'")),
+    )
+
+
+class AuthSession(Base):
+    """Session de connexion gérée par FastAPI (cookie)."""
+
+    __tablename__ = "sessions"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    created_at: Mapped[datetime] = created_at_column()
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    user_agent: Mapped[str | None] = mapped_column(Text)
+
+
+class UserPreferences(Base):
+    __tablename__ = "user_preferences"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    diet: Mapped[Diet] = mapped_column(pg_enum(Diet, "diet"), nullable=False, server_default=Diet.NONE.value)
+    default_servings: Mapped[int] = mapped_column(Integer, nullable=False, server_default="2")
+    expiring_soon_days: Mapped[int] = mapped_column(Integer, nullable=False, server_default="2")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint("default_servings BETWEEN 1 AND 999", name="default_servings_range"),
+        CheckConstraint("expiring_soon_days >= 0", name="expiring_soon_days_positive"),
+    )
+
+
+class UserCategoryThreshold(Base):
+    """Seuil « expire bientôt » propre à une catégorie d'aliments."""
+
+    __tablename__ = "user_category_thresholds"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    category_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("food_categories.id", ondelete="CASCADE"), primary_key=True
+    )
+    days: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (CheckConstraint("days >= 0", name="days_positive"),)
+
+
+class UserExcludedFood(Base):
+    __tablename__ = "user_excluded_foods"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    food_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("foods.id", ondelete="CASCADE"), primary_key=True
+    )
+    reason: Mapped[ExclusionReason] = mapped_column(pg_enum(ExclusionReason, "exclusion_reason"), nullable=False)
+
+
+class AppSetting(Base):
+    """Paramètres globaux, modifiables par le super-administrateur. Jamais de secret ici."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    value: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
