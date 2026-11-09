@@ -1,8 +1,10 @@
 """Connexion à la base PostgreSQL (Supabase)."""
 
+from collections.abc import Iterator
 from functools import lru_cache
 
 from sqlalchemy import Engine, create_engine, text
+from sqlalchemy.orm import Session
 
 from app.secrets import read_secret
 
@@ -32,6 +34,12 @@ def get_engine() -> Engine:
         pool_size=5,
         max_overflow=5,
     )
+
+
+def get_session() -> Iterator[Session]:
+    """Dépendance FastAPI : une session SQLAlchemy par requête."""
+    with Session(get_engine(), expire_on_commit=False) as session:
+        yield session
 
 
 def check_database() -> tuple[str, str | None]:

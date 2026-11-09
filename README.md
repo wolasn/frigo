@@ -16,6 +16,16 @@ Un seul conteneur : FastAPI sert l'API sous `/api` et l'interface React compilé
 3. Ouvrir http://localhost:8000 — la page indique l'état de l'API et de la base.
    Documentation de l'API : http://localhost:8000/api/docs
 
+## Super-administrateur
+
+Créer d'abord son compte depuis l'application, puis :
+
+```
+docker compose exec app python -m app.cli super-admin <identifiant>
+```
+
+Ajouter `--replace` pour remplacer le super-administrateur actuel.
+
 ## Base de données (migrations Alembic)
 
 Les modèles sont dans `backend/app/models/`, les migrations dans `backend/alembic/versions/`.

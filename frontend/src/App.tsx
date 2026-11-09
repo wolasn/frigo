@@ -1,35 +1,32 @@
 import { useEffect, useState } from "react";
+import { api, ApiError, type User } from "./api";
+import AuthPage from "./pages/AuthPage";
+import HomePage from "./pages/HomePage";
 
-type Health = { status: string; database: string; detail?: string };
-
-const DATABASE_LABELS: Record<string, string> = {
-  ok: "connectée",
-  non_configuree: "non configurée",
-  erreur: "injoignable",
-};
+type State = { status: "loading" } | { status: "anonymous" } | { status: "error" } | { status: "ready"; user: User };
 
 export default function App() {
-  const [health, setHealth] = useState<Health | null>(null);
-  const [error, setError] = useState(false);
+  const [state, setState] = useState<State>({ status: "loading" });
 
   useEffect(() => {
-    fetch("/api/health")
-      .then((response) => response.json())
-      .then(setHealth)
-      .catch(() => setError(true));
+    api
+      .me()
+      .then((user) => setState({ status: "ready", user }))
+      .catch((err) => setState(err instanceof ApiError && err.status === 401 ? { status: "anonymous" } : { status: "error" }));
   }, []);
 
-  return (
-    <main style={{ fontFamily: "system-ui, sans-serif", maxWidth: 640, margin: "48px auto", padding: "0 16px" }}>
-      <h1>Frigo &amp; Repas</h1>
-      {error && <p>L'API ne répond pas.</p>}
-      {!error && !health && <p>Vérification de l'API…</p>}
-      {health && (
-        <p>
-          API en ligne · base de données {DATABASE_LABELS[health.database] ?? health.database}
-          {health.detail ? ` (${health.detail})` : ""}
-        </p>
-      )}
-    </main>
-  );
+  if (state.status === "loading") {
+    return <p className="p-8 text-stone-500">Chargement…</p>;
+  }
+  if (state.status === "error") {
+    return (
+      <p className="p-8 text-stone-600 dark:text-stone-400">
+        Le service est momentanément indisponible. Réessaie dans un instant, ou contacte l'administrateur.
+      </p>
+    );
+  }
+  if (state.status === "anonymous") {
+    return <AuthPage onAuthenticated={(user) => setState({ status: "ready", user })} />;
+  }
+  return <HomePage user={state.user} onLoggedOut={() => setState({ status: "anonymous" })} />;
 }
