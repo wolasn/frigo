@@ -22,7 +22,8 @@ def read_secret(name: str) -> str | None:
     """Renvoie le contenu du secret, ou None s'il est absent ou vide."""
     path = secrets_dir() / name
     try:
-        value = path.read_text(encoding="utf-8").strip()
+        # utf-8-sig : ignore le BOM qu'ajoutent certains éditeurs Windows.
+        value = path.read_text(encoding="utf-8-sig").strip()
     except (FileNotFoundError, IsADirectoryError, PermissionError):
         return None
     return value or None
