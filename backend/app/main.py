@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from app.api import agenda, auth, catalog, inventory, recipes, utensils
+from app.api import agenda, auth, catalog, inventory, recipes, shopping, utensils
 from app.db import check_database
 
 app = FastAPI(title="Frigo & Repas", docs_url="/api/docs", openapi_url="/api/openapi.json")
@@ -15,6 +15,7 @@ app.include_router(inventory.router)
 app.include_router(recipes.router)
 app.include_router(utensils.router)
 app.include_router(agenda.router)
+app.include_router(shopping.router)
 
 
 @app.get("/api/health")

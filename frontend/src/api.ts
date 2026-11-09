@@ -174,6 +174,24 @@ export type MealCreate = {
 
 export type MealChange = Partial<{ meal_date: string; slot: MealSlot; position: number; servings: number }>;
 
+export type ShoppingLine = {
+  id: string;
+  origin: "generated" | "manual";
+  food_id: string | null;
+  label: string;
+  quantity: number | null;
+  unit: string | null;
+  aisle: string;
+  recommended_purchase_on: string | null;
+  is_perishable: boolean;
+  expiry_risk: boolean;
+  meals: { title: string; meal_date: string }[];
+};
+
+export type ShoppingList = { id: string; name: string; inventory_id: string; lines: ShoppingLine[] };
+
+export type PurchasedLine = { id: string; quantity?: number; unit?: string; expires_on?: string; storage_location_id?: string };
+
 export type MetaUpdate = Partial<{ rating: number | null; comment: string | null; is_favorite: boolean; is_pinned: boolean }>;
 
 function query(params: Record<string, string | number | boolean | string[] | undefined>): string {
@@ -252,6 +270,13 @@ export const api = {
   updateMeal: (id: string, body: MealChange) => request<{ warnings: string[]; meal: Meal }>("PATCH", `/api/agenda/${id}`, body),
   mealDone: (id: string, leftover_portions?: number) => request<Meal>("POST", `/api/agenda/${id}/done`, { leftover_portions }),
   cancelMeal: (id: string) => request<Meal>("POST", `/api/agenda/${id}/cancel`),
+
+  shopping: () => request<ShoppingList[]>("GET", "/api/shopping"),
+  addShoppingLine: (label: string, shared_inventory_id?: string) =>
+    request<ShoppingLine>("POST", "/api/shopping/manual", { label, shared_inventory_id }),
+  deleteShoppingLine: (id: string) => request<void>("DELETE", `/api/shopping/${id}`),
+  purchase: (lines: PurchasedLine[]) =>
+    request<{ added_to_inventory: number; removed_from_list: number }>("POST", "/api/shopping/purchase", { lines }),
 
   utensils: () => request<Utensil[]>("GET", "/api/utensils"),
   setUtensilOwned: (id: string, owned: boolean) => request<Utensil>("PUT", `/api/utensils/${id}/owned`, { owned }),
