@@ -1,5 +1,5 @@
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.api.deps import SESSION_COOKIE
 from app.cli import set_super_admin
@@ -98,6 +98,8 @@ def test_identifiant_inconnu_meme_message(client):
 
 
 def test_commande_super_admin(client, db_session):
+    # Le vrai super-administrateur est rétrogradé le temps du test (transaction annulée).
+    db_session.execute(update(User).where(User.role == UserRole.SUPER_ADMIN).values(role=UserRole.USER))
     register(client, "alice")
     register(client, "bob")
 

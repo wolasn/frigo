@@ -26,6 +26,15 @@ docker compose exec app python -m app.cli super-admin <identifiant>
 
 Ajouter `--replace` pour remplacer le super-administrateur actuel.
 
+## Catalogue de départ
+
+Charge ou met à jour les catégories, ~100 aliments courants, leurs durées de conservation
+indicatives et les conversions d'unités (relançable sans créer de doublons) :
+
+```
+docker compose exec app python -m app.cli seed-catalogue
+```
+
 ## Base de données (migrations Alembic)
 
 Les modèles sont dans `backend/app/models/`, les migrations dans `backend/alembic/versions/`.

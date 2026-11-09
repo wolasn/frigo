@@ -53,6 +53,8 @@ def test_toutes_les_tables_existent_avec_rls(conn):
 
 
 def test_un_seul_super_admin_et_identifiant_sans_casse(conn):
+    # Le vrai super-administrateur est rétrogradé le temps du test (transaction annulée).
+    conn.execute(text("update users set role = 'user' where role = 'super_admin'"))
     new_user(conn, "test_admin_a", "super_admin")
     expect_violation(
         conn,

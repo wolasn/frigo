@@ -2,6 +2,7 @@
 
     python -m app.cli super-admin <identifiant>             nomme le super-administrateur
     python -m app.cli super-admin <identifiant> --replace   remplace l'actuel
+    python -m app.cli seed-catalogue                         charge le catalogue de départ
 """
 
 import argparse
@@ -43,11 +44,17 @@ def main(argv: list[str] | None = None) -> None:
     promote = commands.add_parser("super-admin", help="nommer le super-administrateur")
     promote.add_argument("username")
     promote.add_argument("--replace", action="store_true", help="remplacer le super-administrateur actuel")
+    commands.add_parser("seed-catalogue", help="charger ou mettre à jour le catalogue de départ")
     args = parser.parse_args(argv)
 
-    if args.command == "super-admin":
-        with Session(get_engine()) as session:
+    with Session(get_engine()) as session:
+        if args.command == "super-admin":
             print(set_super_admin(session, args.username, args.replace))
+        elif args.command == "seed-catalogue":
+            from app.seed.catalogue import seed_catalogue
+
+            counts = seed_catalogue(session)
+            print("Catalogue à jour : " + ", ".join(f"{n} {label}" for label, n in counts.items()))
 
 
 if __name__ == "__main__":
