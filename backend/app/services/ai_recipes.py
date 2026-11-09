@@ -167,6 +167,9 @@ def generate(req: GenerationRequest, client: Any | None = None) -> list[Generate
         raise AiError("L'API Claude est saturée pour ce compte : réessaie dans une minute.") from None
     except anthropic.BadRequestError as error:
         logger.error("Requête refusée par l'API Claude : %s", error.message)
+        if "credit balance" in str(error.message).lower():
+            raise AiError("Le compte API Claude n'a plus de crédit : recharge-le sur console.anthropic.com "
+                          "(Plans & Billing).") from None
         raise AiError("L'API Claude a refusé la requête.") from None
     except anthropic.APIStatusError as error:
         raise AiError(f"L'API Claude est indisponible (erreur {error.status_code}).") from None
