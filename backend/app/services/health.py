@@ -54,6 +54,29 @@ def score_from_marmiton(nutrition: dict | None, fv_share_percent: float) -> tupl
     return compute_score(per_100g, fv_share_percent, per_serving, serving_g)
 
 
+def score_from_foods(parts: list[tuple[object, float]], servings: int) -> tuple[float | None, dict | None]:
+    """Score d'une recette personnelle à partir des valeurs du catalogue (pour 100 g).
+
+    `parts` = [(aliment, poids en g)]. Sans valeurs nutritionnelles pour tous les
+    ingrédients pesés (base Ciqual pas encore importée), le score reste vide.
+    """
+    if not parts or any(getattr(food, "kcal", None) is None for food, _ in parts):
+        return None, None
+    total_g = sum(weight for _, weight in parts)
+    if total_g <= 0:
+        return None, None
+    fields = {"kcal": "kcal", "sugars_g": "sugars_g", "saturated_fat_g": "saturated_fat_g", "fiber_g": "fiber_g",
+              "proteins_g": "proteins_g", "carbs_g": "carbs_g", "fat_g": "fat_g"}
+    totals = {key: sum(float(getattr(f, attr) or 0) * w / 100 for f, w in parts) for key, attr in fields.items()}
+    totals["sodium_g"] = sum(float(f.salt_g or 0) / 2.5 * w / 100 for f, w in parts)
+    per_100g = {k: round(v * 100 / total_g, 2) for k, v in totals.items()}
+    per_serving = {k: round(v / servings, 2) for k, v in totals.items()}
+    fv_g = sum(w for f, w in parts if getattr(f, "is_fruit_vegetable_legume", False))
+    score, detail = compute_score(per_100g, fv_g / total_g * 100, per_serving, round(total_g / servings, 1))
+    detail["source"] = "catalogue"
+    return score, detail
+
+
 def compute_score(per_100g: dict, fv_share_percent: float, per_serving: dict, serving_g: float) -> tuple[float, dict]:
     v = {k: (val or 0.0) for k, val in per_100g.items()}
     negatives = [

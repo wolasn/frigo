@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { api, type IngredientStatus, type RecipeDetail } from "../../api";
 import { ErrorMessage, inputClass, Modal, primaryButton, secondaryButton } from "../ui";
 import PlanDialog from "../agenda/PlanDialog";
+import RecipeEditor from "./RecipeEditor";
+import ShareRecipeDialog from "./ShareRecipeDialog";
 import { DIFFICULTY_LABELS, HealthBadge, SourceBadge } from "./RecipeCardView";
 
 const STATUS: Record<IngredientStatus, { label: string; style: string }> = {
@@ -29,6 +31,30 @@ export default function RecipeDetailDialog({
   const [comment, setComment] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [planning, setPlanning] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [sharing, setSharing] = useState(false);
+
+  async function copy() {
+    setError(null);
+    try {
+      const created = await api.copyRecipe(recipeId);
+      onChanged();
+      setEditing(created.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Copie impossible.");
+    }
+  }
+
+  async function remove() {
+    if (!window.confirm("Supprimer définitivement cette recette ?")) return;
+    try {
+      await api.deleteRecipe(recipeId);
+      onChanged();
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Suppression impossible.");
+    }
+  }
 
   useEffect(() => {
     api
@@ -73,6 +99,31 @@ export default function RecipeDetailDialog({
           {recipe.cook_minutes ? <span>· Cuisson {recipe.cook_minutes} min</span> : null}
           {recipe.is_vegan ? <span>· Vegan</span> : recipe.is_vegetarian ? <span>· Végétarien</span> : null}
           <HealthBadge score={recipe.health_score} />
+        </div>
+
+        {recipe.status === "draft" && (
+          <p className="rounded-lg bg-stone-100 px-3 py-2 text-sm dark:bg-stone-800">Brouillon : n'apparaît pas dans les propositions.</p>
+        )}
+        <div className="flex flex-wrap gap-2 text-sm">
+          {recipe.is_mine ? (
+            <>
+              <button className={secondaryButton + " py-1.5"} onClick={() => setEditing(recipe.id)}>
+                Modifier
+              </button>
+              {recipe.status === "complete" && (
+                <button className={secondaryButton + " py-1.5"} onClick={() => setSharing(true)}>
+                  Partager
+                </button>
+              )}
+              <button className="rounded-lg px-3 py-1.5 text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:bg-stone-800" onClick={remove}>
+                Supprimer
+              </button>
+            </>
+          ) : (
+            <button className={secondaryButton + " py-1.5"} onClick={copy}>
+              Copier pour l'adapter
+            </button>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -204,6 +255,18 @@ export default function RecipeDetailDialog({
           </a>
         )}
       </div>
+      {editing && (
+        <RecipeEditor
+          recipeId={editing}
+          onSaved={onChanged}
+          onClose={() => {
+            setEditing(null);
+            if (editing !== recipeId) onClose();  // une copie : on referme la recette d'origine
+            else api.recipe(recipeId, servings).then(setRecipe).catch(() => onClose());
+          }}
+        />
+      )}
+      {sharing && <ShareRecipeDialog recipeId={recipe.id} title={recipe.title} onClose={() => setSharing(false)} />}
       {planning && (
         <PlanDialog
           title={recipe.title}

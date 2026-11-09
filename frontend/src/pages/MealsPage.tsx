@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { api, type Inventory, type Item, type ProposalQuery, type RecipeCard } from "../api";
+import { api, type Inventory, type Item, type MyRecipes, type ProposalQuery, type RecipeCard } from "../api";
 import PlanDialog from "../components/agenda/PlanDialog";
 import RecipeCardView from "../components/recipes/RecipeCardView";
+import RecipeEditor from "../components/recipes/RecipeEditor";
 import RecipeDetailDialog from "../components/recipes/RecipeDetailDialog";
 import { ErrorMessage, inputClass, primaryButton, secondaryButton } from "../components/ui";
 import { expiryText, formatQuantity, STATUS_STYLES } from "../format";
 
-type Tab = "proposals" | "favorites";
+type Tab = "proposals" | "favorites" | "mine";
+
+const TAB_LABELS: Record<Tab, string> = { proposals: "Propositions", favorites: "Épinglés & favoris", mine: "Mes recettes" };
 
 export default function MealsPage() {
   const [tab, setTab] = useState<Tab>("proposals");
@@ -24,6 +27,7 @@ export default function MealsPage() {
   const [searchText, setSearchText] = useState("");
   const [searchResults, setSearchResults] = useState<RecipeCard[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const loadLeftovers = useCallback((list: Inventory[]) => {
@@ -51,7 +55,7 @@ export default function MealsPage() {
   }, [loadLeftovers]);
 
   const load = useCallback(() => {
-    if (selectedInventories === null) return;
+    if (selectedInventories === null || tab === "mine") return;
     setError(null);
     const request =
       tab === "favorites"
@@ -105,18 +109,20 @@ export default function MealsPage() {
     <div>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">Repas</h1>
-        <div className="grid grid-cols-2 rounded-lg bg-stone-200 p-1 text-sm dark:bg-stone-800">
-          {(["proposals", "favorites"] as const).map((t) => (
+        <div className="grid grid-cols-3 rounded-lg bg-stone-200 p-1 text-sm dark:bg-stone-800">
+          {(["proposals", "favorites", "mine"] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
               className={"rounded-md px-3 py-1.5 font-medium " + (tab === t ? "bg-white shadow-sm dark:bg-stone-900" : "text-stone-600 dark:text-stone-400")}
             >
-              {t === "proposals" ? "Propositions" : "Épinglés & favoris"}
+              {TAB_LABELS[t]}
             </button>
           ))}
         </div>
       </div>
+
+      {tab === "mine" && <MyRecipesTab onOpen={setOpenRecipe} refreshKey={refreshKey} onChanged={() => setRefreshKey((k) => k + 1)} />}
 
       {tab === "proposals" && (
         <>
@@ -244,7 +250,7 @@ export default function MealsPage() {
       {tab === "proposals" && (
         <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-stone-500">Propositions{cards ? ` · ${cards.length}` : ""}</h2>
       )}
-      {cards === null ? (
+      {tab === "mine" ? null : cards === null ? (
         <p className="text-stone-500">Chargement…</p>
       ) : cards.length === 0 ? (
         <div className="rounded-xl border border-dashed border-stone-300 p-8 text-center text-stone-600 dark:border-stone-700 dark:text-stone-400">
@@ -258,7 +264,17 @@ export default function MealsPage() {
         <CardGrid cards={cards} onOpen={setOpenRecipe} />
       )}
 
-      {openRecipe && <RecipeDetailDialog recipeId={openRecipe} initialServings={servings} onChanged={load} onClose={() => setOpenRecipe(null)} />}
+      {openRecipe && (
+        <RecipeDetailDialog
+          recipeId={openRecipe}
+          initialServings={servings}
+          onChanged={() => {
+            load();
+            setRefreshKey((k) => k + 1);
+          }}
+          onClose={() => setOpenRecipe(null)}
+        />
+      )}
       {planLeftover && (
         <PlanDialog
           title={planLeftover.name}
@@ -269,6 +285,80 @@ export default function MealsPage() {
           onClose={() => setPlanLeftover(null)}
         />
       )}
+    </div>
+  );
+}
+
+function MyRecipesTab({ onOpen, refreshKey, onChanged }: { onOpen: (id: string) => void; refreshKey: number; onChanged: () => void }) {
+  const [data, setData] = useState<MyRecipes | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    api.myRecipes().then(setData).catch(() => setData({ mine: [], shared_with_me: [] }));
+  }, [refreshKey]);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm text-stone-600 dark:text-stone-400">
+          Crée tes recettes, ou ouvre n'importe quelle recette et choisis « Copier pour l'adapter ».
+        </p>
+        <button className={primaryButton} onClick={() => setCreating(true)}>
+          + Nouvelle recette
+        </button>
+      </div>
+      {data === null ? (
+        <p className="text-stone-500">Chargement…</p>
+      ) : (
+        <>
+          <section>
+            <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-stone-500">Mes recettes · {data.mine.length}</h2>
+            {data.mine.length === 0 ? (
+              <p className="text-sm text-stone-500">Aucune recette personnelle pour l'instant.</p>
+            ) : (
+              <ul className="divide-y divide-stone-200 overflow-hidden rounded-xl border border-stone-200 bg-white dark:divide-stone-800 dark:border-stone-800 dark:bg-stone-900">
+                {data.mine.map((r) => (
+                  <li key={r.id}>
+                    <button className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-stone-50 dark:hover:bg-stone-800" onClick={() => onOpen(r.id)}>
+                      <span>
+                        <span className="font-medium">{r.title}</span>
+                        <span className="ml-2 text-sm text-stone-500">
+                          {r.servings} pers.{r.is_vegan ? " · vegan" : r.is_vegetarian ? " · végétarien" : ""}
+                          {r.shared_with > 0 && ` · partagée (${r.shared_with})`}
+                        </span>
+                      </span>
+                      <span
+                        className={
+                          "shrink-0 rounded-full px-2 py-0.5 text-xs font-medium " +
+                          (r.status === "complete" ? "bg-brand-100 text-brand-700" : "bg-stone-200 text-stone-700 dark:bg-stone-700 dark:text-stone-200")
+                        }
+                      >
+                        {r.status === "complete" ? "complète" : "brouillon"}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+          {data.shared_with_me.length > 0 && (
+            <section>
+              <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-stone-500">Partagées avec moi</h2>
+              <ul className="divide-y divide-stone-200 overflow-hidden rounded-xl border border-stone-200 bg-white dark:divide-stone-800 dark:border-stone-800 dark:bg-stone-900">
+                {data.shared_with_me.map((r) => (
+                  <li key={r.id}>
+                    <button className="w-full px-4 py-3 text-left hover:bg-stone-50 dark:hover:bg-stone-800" onClick={() => onOpen(r.id)}>
+                      <span className="font-medium">{r.title}</span>
+                      <span className="ml-2 text-sm text-stone-500">par {r.author ?? "?"}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </>
+      )}
+      {creating && <RecipeEditor recipeId={null} onSaved={onChanged} onClose={() => setCreating(false)} />}
     </div>
   );
 }

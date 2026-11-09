@@ -97,6 +97,8 @@ export type RecipeCard = {
   id: string;
   title: string;
   source: "marmiton" | "ai" | "user";
+  status: "draft" | "complete";
+  is_mine: boolean;
   image_url: string | null;
   external_url: string | null;
   base_servings: number;
@@ -239,6 +241,33 @@ export async function statusWithKey(key: string): Promise<DbStatus> {
   return data as DbStatus;
 }
 
+export type RecipeInput = {
+  title: string;
+  servings: number;
+  prep_minutes: number | null;
+  cook_minutes: number | null;
+  difficulty: "easy" | "medium" | "hard" | null;
+  image_url: string | null;
+  ingredients: { food_id: string | null; text?: string | null; quantity: number | null; unit: string | null; is_optional: boolean }[];
+  steps: string[];
+  utensils: { utensil_id: string; optional: boolean }[];
+  complete: boolean;
+};
+
+export type RecipeEdit = Omit<RecipeInput, "ingredients" | "complete"> & {
+  id: string;
+  status: "draft" | "complete";
+  ingredients: { food_id: string | null; food_name: string | null; text: string; quantity: number | null; unit: string | null; units: string[]; is_optional: boolean }[];
+  missing: string[];
+};
+
+export type MyRecipes = {
+  mine: { id: string; title: string; status: "draft" | "complete"; servings: number; is_vegan: boolean; is_vegetarian: boolean; shared_with: number; updated_at: string }[];
+  shared_with_me: { id: string; title: string; author: string | null }[];
+};
+
+export type RecipeShareOut = { id: string; label: string; kind: "user" | "inventory" };
+
 export type MetaUpdate = Partial<{ rating: number | null; comment: string | null; is_favorite: boolean; is_pinned: boolean }>;
 
 function query(params: Record<string, string | number | boolean | string[] | undefined>): string {
@@ -360,6 +389,17 @@ export const api = {
 
   dbStatus: () => request<DbStatus>("GET", "/api/admin/db-status"),
   checkDbNow: () => request<DbStatus>("POST", "/api/admin/check-now"),
+
+  myRecipes: () => request<MyRecipes>("GET", "/api/my-recipes"),
+  recipeForEdit: (id: string) => request<RecipeEdit>("GET", `/api/my-recipes/${id}`),
+  createRecipe: (body: RecipeInput) => request<RecipeEdit>("POST", "/api/my-recipes", body),
+  saveRecipe: (id: string, body: RecipeInput) => request<RecipeEdit>("PUT", `/api/my-recipes/${id}`, body),
+  copyRecipe: (id: string) => request<RecipeEdit>("POST", `/api/my-recipes/${id}/copy`),
+  deleteRecipe: (id: string) => request<void>("DELETE", `/api/my-recipes/${id}`),
+  recipeShares: (id: string) => request<RecipeShareOut[]>("GET", `/api/my-recipes/${id}/shares`),
+  shareRecipe: (id: string, body: { username?: string; inventory_id?: string }) =>
+    request<RecipeShareOut[]>("POST", `/api/my-recipes/${id}/shares`, body),
+  unshareRecipe: (id: string, shareId: string) => request<RecipeShareOut[]>("DELETE", `/api/my-recipes/${id}/shares/${shareId}`),
 
   utensils: () => request<Utensil[]>("GET", "/api/utensils"),
   setUtensilOwned: (id: string, owned: boolean) => request<Utensil>("PUT", `/api/utensils/${id}/owned`, { owned }),

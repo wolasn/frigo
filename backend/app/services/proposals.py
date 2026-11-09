@@ -84,6 +84,7 @@ class Evaluation:
     allergic: bool
     meta: UserRecipeMeta | None = None
     scale: Decimal = Decimal(1)
+    viewer_id: uuid.UUID | None = None
 
     @property
     def missing_count(self) -> int:
@@ -161,7 +162,7 @@ def _amount(ingredient: RecipeIngredient, scale: Decimal) -> str | None:
     if ingredient.quantity is None:
         return None
     quantity = Decimal(ingredient.quantity) * scale
-    if ingredient.unit is None:
+    if ingredient.unit in (None, "piece"):
         return _fmt(quantity)
     singular, plural = UNIT_DISPLAY.get(ingredient.unit, (ingredient.unit, ingredient.unit))
     return f"{_fmt(quantity)} {plural if quantity > 1 else singular}"
@@ -264,7 +265,10 @@ def evaluate_recipes(session: Session, user: User, options: Options, recipes: li
     ids = [r.id for r in recipes]
     ingredients, utensils = load_recipe_parts(session, ids)
     meta = load_meta(session, user, ids)
-    return [evaluate(r, ingredients[r.id], utensils[r.id], ctx, options.servings, meta.get(r.id)) for r in recipes]
+    evaluations = [evaluate(r, ingredients[r.id], utensils[r.id], ctx, options.servings, meta.get(r.id)) for r in recipes]
+    for evaluation in evaluations:
+        evaluation.viewer_id = user.id
+    return evaluations
 
 
 def propose(session: Session, user: User, options: Options, limit: int = 60) -> list[Evaluation]:

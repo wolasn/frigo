@@ -11,7 +11,7 @@ from sqlalchemy import or_, select
 from app.api.deps import CurrentUser, DbSession
 from app.clock import today
 from app.models import Recipe, RecipeStep, UserPreferences, UserRecipeMeta
-from app.models.enums import Diet, Difficulty, RecipeSource
+from app.models.enums import Diet, Difficulty, RecipeSource, RecipeStatus
 from app.services.marmiton import MarmitonError
 from app.services.proposals import (
     Evaluation,
@@ -37,6 +37,8 @@ class RecipeCard(BaseModel):
     id: uuid.UUID
     title: str
     source: RecipeSource
+    status: RecipeStatus
+    is_mine: bool  # recette personnelle dont l'utilisateur est l'auteur
     image_url: str | None
     external_url: str | None
     base_servings: int
@@ -108,8 +110,10 @@ class DiscoverOut(BaseModel):
 
 def _card(e: Evaluation, servings: int) -> dict:
     r, m = e.recipe, e.meta
+    is_mine = r.source == RecipeSource.USER and e.viewer_id is not None and r.author_user_id == e.viewer_id
     return dict(
-        id=r.id, title=r.title, source=r.source, image_url=r.image_url, external_url=r.external_url,
+        id=r.id, title=r.title, source=r.source, status=r.status, is_mine=is_mine,
+        image_url=r.image_url, external_url=r.external_url,
         base_servings=r.servings, prep_minutes=r.prep_minutes, cook_minutes=r.cook_minutes,
         difficulty=r.difficulty, is_vegan=r.is_vegan, is_vegetarian=r.is_vegetarian,
         health_score=float(r.health_score) if r.health_score is not None else None,
