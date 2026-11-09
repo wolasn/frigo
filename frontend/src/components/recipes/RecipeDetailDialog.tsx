@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type IngredientStatus, type RecipeDetail } from "../../api";
 import { ErrorMessage, inputClass, Modal, primaryButton, secondaryButton } from "../ui";
+import PlanDialog from "../agenda/PlanDialog";
 import { DIFFICULTY_LABELS, HealthBadge, SourceBadge } from "./RecipeCardView";
 
 const STATUS: Record<IngredientStatus, { label: string; style: string }> = {
@@ -27,6 +28,7 @@ export default function RecipeDetailDialog({
   const [recipe, setRecipe] = useState<RecipeDetail | null>(null);
   const [comment, setComment] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [planning, setPlanning] = useState(false);
 
   useEffect(() => {
     api
@@ -74,6 +76,9 @@ export default function RecipeDetailDialog({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <button className={primaryButton + " py-1.5 text-sm"} onClick={() => setPlanning(true)}>
+            Planifier
+          </button>
           <button className={secondaryButton + " py-1.5 text-sm"} onClick={() => update({ is_favorite: !recipe.is_favorite })}>
             {recipe.is_favorite ? "★ Favori" : "☆ Ajouter aux favoris"}
           </button>
@@ -199,6 +204,15 @@ export default function RecipeDetailDialog({
           </a>
         )}
       </div>
+      {planning && (
+        <PlanDialog
+          title={recipe.title}
+          recipeId={recipe.id}
+          defaultServings={servings}
+          onPlanned={onChanged}
+          onClose={() => setPlanning(false)}
+        />
+      )}
     </Modal>
   );
 }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, type Inventory, type Item, type ProposalQuery, type RecipeCard } from "../api";
+import PlanDialog from "../components/agenda/PlanDialog";
 import RecipeCardView from "../components/recipes/RecipeCardView";
 import RecipeDetailDialog from "../components/recipes/RecipeDetailDialog";
 import { ErrorMessage, inputClass, primaryButton, secondaryButton } from "../components/ui";
@@ -18,21 +19,26 @@ export default function MealsPage() {
   const [withMissingUtensils, setWithMissingUtensils] = useState(false);
   const [cards, setCards] = useState<RecipeCard[] | null>(null);
   const [leftovers, setLeftovers] = useState<Item[]>([]);
+  const [planLeftover, setPlanLeftover] = useState<Item | null>(null);
   const [openRecipe, setOpenRecipe] = useState<string | null>(null);
   const [searchText, setSearchText] = useState("");
   const [searchResults, setSearchResults] = useState<RecipeCard[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const loadLeftovers = useCallback((list: Inventory[]) => {
+    Promise.all(list.map((i) => api.items(i.id)))
+      .then((results) => setLeftovers(results.flatMap((r) => r.items).filter((i) => i.kind === "leftover")))
+      .catch(() => setLeftovers([]));
+  }, []);
+
   useEffect(() => {
     api.inventories().then((list) => {
       setInventories(list);
       setSelectedInventories(list.filter((i) => i.include_in_suggestions).map((i) => i.id));
-      Promise.all(list.map((i) => api.items(i.id)))
-        .then((results) => setLeftovers(results.flatMap((r) => r.items).filter((i) => i.kind === "leftover")))
-        .catch(() => setLeftovers([]));
+      loadLeftovers(list);
     });
-  }, []);
+  }, [loadLeftovers]);
 
   const load = useCallback(() => {
     if (selectedInventories === null) return;
@@ -111,8 +117,16 @@ export default function MealsPage() {
                 {leftovers.map((l) => (
                   <div key={l.id} className="shrink-0 rounded-xl border border-stone-200 bg-white px-4 py-3 dark:border-stone-800 dark:bg-stone-900">
                     <p className="font-medium">{l.name}</p>
-                    <p className="text-sm text-stone-600 dark:text-stone-400">{formatQuantity(l.quantity, l.unit)}</p>
+                    <p className="text-sm text-stone-600 dark:text-stone-400">
+                      {formatQuantity(l.quantity, l.unit)}
+                      {l.reserved > 0 && ` · ${l.reserved} planifiée(s)`}
+                    </p>
                     <span className={"mt-1 inline-block rounded-full px-2 py-0.5 text-xs font-medium " + STATUS_STYLES[l.status]}>{expiryText(l)}</span>
+                    {l.quantity - l.reserved > 0 && (
+                      <button className="mt-2 block text-sm font-medium text-brand-700 hover:underline dark:text-brand-500" onClick={() => setPlanLeftover(l)}>
+                        Planifier
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -235,6 +249,16 @@ export default function MealsPage() {
       )}
 
       {openRecipe && <RecipeDetailDialog recipeId={openRecipe} initialServings={servings} onChanged={load} onClose={() => setOpenRecipe(null)} />}
+      {planLeftover && (
+        <PlanDialog
+          title={planLeftover.name}
+          leftoverItemId={planLeftover.id}
+          defaultServings={Math.max(1, Math.floor(planLeftover.quantity - planLeftover.reserved))}
+          maxServings={Math.max(1, Math.floor(planLeftover.quantity - planLeftover.reserved))}
+          onPlanned={() => loadLeftovers(inventories)}
+          onClose={() => setPlanLeftover(null)}
+        />
+      )}
     </div>
   );
 }

@@ -32,6 +32,7 @@ from app.services.inventory import (
     require_location,
     require_membership,
 )
+from app.services.planning import recompute_reservations, reserved_by_item
 from app.services.units import UNITS_BY_REFERENCE, UnitError, from_reference, normalize_unit, to_reference
 
 router = APIRouter(prefix="/api", tags=["inventaire"])
@@ -66,6 +67,7 @@ class ItemOut(BaseModel):
     name: str
     category_name: str | None
     quantity: float
+    reserved: float  # part réservée par des repas prévus, dans la même unité
     unit: str
     units: list[str]
     storage_location_id: uuid.UUID
@@ -165,10 +167,17 @@ def _to_ref(session: Session, food: Food | None, quantity: Decimal, unit: str) -
 
 
 def _item_out(
-    session: Session, item: InventoryItem, food: Food | None, category: str | None, thresholds: _Thresholds
+    session: Session,
+    item: InventoryItem,
+    food: Food | None,
+    category: str | None,
+    thresholds: _Thresholds,
+    reserved: Decimal | None = None,
 ) -> ItemOut:
     state, days_left = expiry_status(item.expires_on, item.date_type, thresholds.for_food(food), today())
     unit = _display_unit(item)
+    if reserved is None:
+        reserved = reserved_by_item(session, [item.id]).get(item.id, Decimal(0))
     return ItemOut(
         id=item.id,
         inventory_id=item.inventory_id,
@@ -177,6 +186,7 @@ def _item_out(
         name=food.name if food else (item.leftover_name or "Reste"),
         category_name=category,
         quantity=_quantity_in(session, item, food, item.quantity, unit),
+        reserved=_quantity_in(session, item, food, reserved, unit) if reserved else 0.0,
         unit=unit,
         units=list(UNITS_BY_REFERENCE[food.reference_unit]) if food else ["portion"],
         storage_location_id=item.storage_location_id,
@@ -247,7 +257,11 @@ def list_items(inventory_id: uuid.UUID, session: DbSession, user: CurrentUser) -
         .where(InventoryItem.inventory_id == inventory_id, InventoryItem.archived_at.is_(None))
         .order_by(InventoryItem.expires_on, InventoryItem.created_at)
     ).all()
-    items = [_item_out(session, item, food, category, thresholds) for item, food, category in rows]
+    reserved = reserved_by_item(session, [item.id for item, _, _ in rows])
+    items = [
+        _item_out(session, item, food, category, thresholds, reserved.get(item.id, Decimal(0)))
+        for item, food, category in rows
+    ]
     alerts = {"expired": 0, "soon": 0, "best_before_passed": 0}
     for item in items:
         if item.status in alerts:
@@ -302,6 +316,8 @@ def add_item(inventory_id: uuid.UUID, body: ItemCreate, session: DbSession, user
         added_by=user.id,
     )
     session.add(item)
+    session.flush()
+    recompute_reservations(session)  # tout changement de stock peut déplacer les réservations
     session.commit()
     return _single_item_out(session, user, item)
 
@@ -337,6 +353,8 @@ def update_item(item_id: uuid.UUID, body: ItemUpdate, session: DbSession, user: 
 
     if item.kind == ItemKind.LEFTOVER and item.date_type == DateType.BEST_BEFORE:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Un reste a une date limite de consommation.")
+    session.flush()
+    recompute_reservations(session)  # tout changement de stock peut déplacer les réservations
     session.commit()
     return _single_item_out(session, user, item)
 
@@ -366,6 +384,8 @@ def remove_item(item_id: uuid.UUID, body: RemoveIn, session: DbSession, user: Cu
     if item.quantity <= 0:
         item.quantity = Decimal(0)
         item.archived_at = datetime.now(UTC)
+    session.flush()
+    recompute_reservations(session)  # tout changement de stock peut déplacer les réservations
     session.commit()
     return _single_item_out(session, user, item)
 
@@ -418,5 +438,7 @@ def restore_removal(removal_id: uuid.UUID, session: DbSession, user: CurrentUser
     item.quantity += removal.quantity
     item.archived_at = None
     removal.undone_at = datetime.now(UTC)
+    session.flush()
+    recompute_reservations(session)  # tout changement de stock peut déplacer les réservations
     session.commit()
     return _single_item_out(session, user, item)

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, type User } from "../api";
+import AgendaPage from "./AgendaPage";
 import InventoryPage from "./InventoryPage";
 import MealsPage from "./MealsPage";
 import UtensilsPage from "./UtensilsPage";
@@ -9,7 +10,7 @@ type SectionId = "inventory" | "meals" | "utensils" | "agenda" | "shopping";
 const SECTIONS: { id: SectionId; label: string; ready: boolean }[] = [
   { id: "inventory", label: "Inventaire", ready: true },
   { id: "meals", label: "Repas", ready: true },
-  { id: "agenda", label: "Agenda", ready: false },
+  { id: "agenda", label: "Agenda", ready: true },
   { id: "shopping", label: "Courses", ready: false },
   { id: "utensils", label: "Ustensiles", ready: true },
 ];
@@ -87,6 +88,7 @@ export default function HomePage({ user, onLoggedOut }: { user: User; onLoggedOu
         {section === "inventory" && <InventoryPage />}
         {section === "meals" && <MealsPage />}
         {section === "utensils" && <UtensilsPage />}
+        {section === "agenda" && <AgendaPage />}
       </main>
     </div>
   );

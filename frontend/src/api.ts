@@ -31,6 +31,7 @@ export type Item = {
   name: string;
   category_name: string | null;
   quantity: number;
+  reserved: number;
   unit: string;
   units: string[];
   storage_location_id: string;
@@ -141,6 +142,38 @@ export type ProposalQuery = {
 
 export type Utensil = { id: string; name: string; category: "cooking" | "preparation" | "container"; owned: boolean; is_custom: boolean };
 
+export type MealSlot = "breakfast" | "lunch" | "snack" | "dinner";
+
+export type Meal = {
+  id: string;
+  meal_date: string;
+  slot: MealSlot;
+  position: number;
+  servings: number;
+  status: "planned" | "done" | "cancelled";
+  kind: "recipe" | "leftover";
+  recipe_id: string | null;
+  leftover_item_id: string | null;
+  title: string;
+  image_url: string | null;
+  agenda_id: string | null;
+  agenda_name: string;
+  planned_by: string | null;
+  can_edit: boolean;
+  shortages: { name: string; reason: "expires_before" | "insufficient" }[];
+};
+
+export type MealCreate = {
+  recipe_id?: string;
+  leftover_item_id?: string;
+  meal_date: string;
+  slot: MealSlot;
+  servings: number;
+  shared_inventory_id?: string;
+};
+
+export type MealChange = Partial<{ meal_date: string; slot: MealSlot; position: number; servings: number }>;
+
 export type MetaUpdate = Partial<{ rating: number | null; comment: string | null; is_favorite: boolean; is_pinned: boolean }>;
 
 function query(params: Record<string, string | number | boolean | string[] | undefined>): string {
@@ -211,6 +244,14 @@ export const api = {
   importRecipe: (url: string) => request<RecipeCard>("POST", "/api/recipes/import", { url }),
   searchRecipes: (q: string) => request<RecipeCard[]>("POST", "/api/recipes/search", { query: q }),
   discoverRecipes: () => request<{ queries: string[]; recipes: RecipeCard[] }>("POST", "/api/recipes/discover"),
+
+  agenda: (start: string, end: string) => request<Meal[]>("GET", `/api/agenda?${query({ start, end })}`),
+  pastUnmarked: () => request<Meal[]>("GET", "/api/agenda/past-unmarked"),
+  planMeal: (body: MealCreate) => request<Meal>("POST", "/api/agenda", body),
+  previewMove: (id: string, body: MealChange) => request<{ warnings: string[] }>("POST", `/api/agenda/${id}/preview-move`, body),
+  updateMeal: (id: string, body: MealChange) => request<{ warnings: string[]; meal: Meal }>("PATCH", `/api/agenda/${id}`, body),
+  mealDone: (id: string, leftover_portions?: number) => request<Meal>("POST", `/api/agenda/${id}/done`, { leftover_portions }),
+  cancelMeal: (id: string) => request<Meal>("POST", `/api/agenda/${id}/cancel`),
 
   utensils: () => request<Utensil[]>("GET", "/api/utensils"),
   setUtensilOwned: (id: string, owned: boolean) => request<Utensil>("PUT", `/api/utensils/${id}/owned`, { owned }),

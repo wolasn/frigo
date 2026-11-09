@@ -169,6 +169,7 @@ function ItemRow({ item, onEdit, onRemove }: { item: Item; onEdit: () => void; o
         </p>
         <p className="text-sm text-stone-600 dark:text-stone-400">
           {formatQuantity(item.quantity, item.unit)}
+          {item.reserved > 0 && <span className="text-sky-700 dark:text-sky-400"> · dont {formatQuantity(item.reserved, item.unit)} réservé</span>}
           {item.opened_on && " · ouvert"}
         </p>
       </div>

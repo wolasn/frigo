@@ -32,6 +32,7 @@ from app.models import (
 )
 from app.models.enums import DateType, Diet, ExclusionReason, ItemKind, RecipeStatus, UtensilRequirement
 from app.services.ingredients import parse_ingredient
+from app.services.planning import reserved_by_item
 from app.services.recipes import visible_recipes_clause
 
 # États d'un ingrédient. « seasoning » et « infinite » ne comptent jamais comme achat.
@@ -118,20 +119,27 @@ def build_context(session: Session, user: User, options: Options) -> Context:
     )
     inventory_ids = [i for i in options.inventory_ids if i in allowed]
 
-    for item in session.scalars(
-        select(InventoryItem).where(
-            InventoryItem.inventory_id.in_(inventory_ids),
-            InventoryItem.archived_at.is_(None),
-            InventoryItem.kind == ItemKind.INGREDIENT,
+    items = list(
+        session.scalars(
+            select(InventoryItem).where(
+                InventoryItem.inventory_id.in_(inventory_ids),
+                InventoryItem.archived_at.is_(None),
+                InventoryItem.kind == ItemKind.INGREDIENT,
+            )
         )
-    ):
+    )
+    # Ce que les repas prévus ont déjà réservé n'est plus disponible pour une proposition.
+    reserved = reserved_by_item(session, [i.id for i in items])
+    for item in items:
         usable = item.expires_on >= options.date or item.date_type == DateType.BEST_BEFORE
         if not usable or item.food_id is None:
             continue
-        ctx.stock[item.food_id] += item.quantity
+        available = item.quantity - reserved.get(item.id, Decimal(0))
+        if available <= 0:
+            continue
+        ctx.stock[item.food_id] += available
         if item.expires_on <= today() + timedelta(days=threshold):
             ctx.expiring.add(item.food_id)
-    # Réservations de l'agenda : à déduire du stock quand l'agenda existera.
 
     ctx.infinite = set(session.scalars(select(Food.id).where(Food.is_always_infinite.is_(True))))
     ctx.infinite |= set(session.scalars(select(UserInfiniteFood.food_id).where(UserInfiniteFood.user_id == user.id)))
