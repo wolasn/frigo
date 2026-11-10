@@ -51,6 +51,14 @@ Après avoir enrichi le catalogue, refaire le rapprochement des ingrédients des
 docker compose exec app python -m app.cli rematch-ingredients
 ```
 
+Pour démarrer avec des recettes variées (une cinquantaine de recherches Marmiton : légumineuses,
+poisson, volaille, végétarien, soupes… environ 5 minutes). Chaque relance ajoute 3 nouvelles
+recettes par recherche : celles déjà en base (même adresse ou même titre) sont sautées.
+
+```
+docker compose exec app python -m app.cli import-marmiton-selection
+```
+
 ## Recettes Marmiton
 
 Les recettes sont lues sur Marmiton (données structurées des fiches), au plus une requête toutes les 1,5 s,

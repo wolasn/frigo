@@ -12,11 +12,11 @@
 import argparse
 import sys
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_engine
-from app.models import User
+from app.models import Recipe, User
 from app.models.enums import UserRole
 from app.services.accounts import find_user_by_username
 
@@ -50,6 +50,8 @@ def main(argv: list[str] | None = None) -> None:
     promote.add_argument("--replace", action="store_true", help="remplacer le super-administrateur actuel")
     commands.add_parser("seed-catalogue", help="charger ou mettre à jour le catalogue de départ (avec Ciqual)")
     commands.add_parser("rematch-ingredients", help="refaire le rapprochement des ingrédients Marmiton")
+    selection = commands.add_parser("import-marmiton-selection", help="importer une sélection variée de recettes Marmiton")
+    selection.add_argument("--per-query", type=int, default=None, help="recettes par recherche (3 par défaut)")
     commands.add_parser("check-db", help="vérifier la base maintenant (une tentative) et alerter si besoin")
     commands.add_parser("purge", help="lancer la purge nocturne maintenant")
     commands.add_parser("test-email", help="envoyer un e-mail de test au super-administrateur")
@@ -93,6 +95,25 @@ def main(argv: list[str] | None = None) -> None:
             from app.maintenance import purge
 
             print("Purge : " + ", ".join(f"{n} {label}" for label, n in purge(session).items()))
+        elif args.command == "import-marmiton-selection":
+            from app.seed.marmiton_selection import PER_QUERY, QUERIES
+            from app.services.marmiton import MarmitonClient, MarmitonError
+            from app.services.recipes import import_new_marmiton
+
+            client = MarmitonClient()
+            before = session.scalar(select(func.count()).select_from(Recipe))
+            for theme, queries in QUERIES.items():
+                for query in queries:
+                    try:
+                        found = import_new_marmiton(session, query, args.per_query or PER_QUERY, client)
+                    except MarmitonError as error:
+                        print(f"  {query} : échec ({error})")
+                        continue
+                    print(f"  [{theme}] {query} : {len(found)} nouvelle(s)", flush=True)
+                    for recipe in found:
+                        print(f"      + {recipe.title}", flush=True)
+            after = session.scalar(select(func.count()).select_from(Recipe))
+            print(f"Recettes en base : {before} → {after}")
         elif args.command == "rematch-ingredients":
             from app.services.recipes import rematch_ingredients
 

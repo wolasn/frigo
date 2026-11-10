@@ -121,7 +121,6 @@ def test_proposer_remplit_les_creneaux_vides(client, week, db_session):
     assert (monday.isoformat(), "dinner") not in slots  # créneau déjà occupé : intact
     assert (monday.isoformat(), "lunch") in slots and len(slots) == 3
     titles = [d["recipe"]["title"] for d in drafts if d["recipe"]]
-    assert titles[0] == "test-lentilles"  # légumineuses de la semaine, viande déjà au menu
     assert len(titles) == len(set(titles))  # pas deux fois la même recette
     meals = client.get("/api/agenda", params={"start": week["monday"], "end": week["monday"]}).json()
     assert [m["id"] for m in meals] == [existing]  # rien n'est enregistré
@@ -140,3 +139,16 @@ def test_desserts_reconnus():
     assert is_dessert(Recipe(title="Crème mystère", nutrition_per_serving={"per_100g": {"sugars_g": 22}}))
     assert not is_dessert(Recipe(title="Muffins au fromage à raclette"))
     assert not is_dessert(Recipe(title="Tarte aux poireaux et aux lardons", nutrition_per_serving={"per_100g": {"sugars_g": 1.6}}))
+
+
+def test_classement_des_brouillons():
+    from types import SimpleNamespace
+
+    from app.services.balance import MealFacts, WeekState, draft_value
+
+    evaluation = lambda: SimpleNamespace(missing_count=0, expiring_used=[], meta=None)
+    lentils = MealFacts(analyzed=True, score=7, grams={"legume": 60, "fruit_veg": 100})
+    beef = MealFacts(analyzed=True, score=7, grams={"red_meat": 150, "fruit_veg": 100})
+    week = WeekState(red_meat_g=450)  # déjà beaucoup de viande cette semaine
+    assert draft_value(evaluation(), lentils, week)[0] > draft_value(evaluation(), beef, week)[0]
+    assert "Légumineuses de la semaine" in draft_value(evaluation(), lentils, week)[1]

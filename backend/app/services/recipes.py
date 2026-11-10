@@ -1,5 +1,7 @@
 """Construction des recettes (import Marmiton), visibilité et recherche par les ingrédients."""
 
+import re
+import unicodedata
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -312,3 +314,35 @@ def recompute_catalogue_scores(session: Session) -> int:
             changed += 1
     session.flush()
     return changed
+
+
+def _title_key(title: str) -> str:
+    text = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode().lower()
+    return " ".join(re.findall(r"[a-z0-9]+", text))
+
+
+def import_new_marmiton(session: Session, query: str, count: int, client: MarmitonClient | None = None) -> list[Recipe]:
+    """Importe jusqu'à `count` recettes absentes de la base pour cette recherche, sans passer par le
+    cache : une relance apporte de nouvelles recettes. Une recette déjà présente est sautée : même adresse (sans
+    la télécharger) ou même titre sous une autre adresse."""
+    client = client or MarmitonClient()
+    matcher = FoodMatcher(session)
+    titles = {_title_key(t) for t in session.scalars(select(Recipe.title))}
+    imported: list[Recipe] = []
+    for url in client.search(query):
+        if len(imported) >= count:
+            break
+        if existing_recipe(session, url) is not None:
+            continue
+        try:
+            data = client.recipe(url)
+        except MarmitonError:
+            continue
+        key = _title_key(data.title)
+        if key in titles:
+            continue
+        recipe = build_marmiton_recipe(session, data, matcher)
+        session.commit()
+        titles.add(key)
+        imported.append(recipe)
+    return imported
