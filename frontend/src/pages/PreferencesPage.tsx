@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { api, type Category, type Food, type Preferences, type User } from "../api";
-import { ErrorMessage, Field, inputClass, primaryButton, secondaryButton } from "../components/ui";
+import { ErrorMessage, Field, inputClass, primaryButton, secondaryButton, Loading } from "../components/ui";
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return (
@@ -112,7 +112,7 @@ export default function PreferencesPage({ user, onUserChanged, onAccountDeleted 
     }
   }
 
-  if (!prefs) return error ? <ErrorMessage message={error} /> : <p className="text-stone-500">Chargement…</p>;
+  if (!prefs) return error ? <ErrorMessage message={error} /> : <Loading />;
 
   const unusedCategories = categories.filter((c) => !prefs.thresholds.some((t) => t.category_id === c.id));
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type IngredientStatus, type RecipeDetail } from "../../api";
 import { formatDate } from "../../format";
-import { ErrorMessage, inputClass, Modal, primaryButton, secondaryButton } from "../ui";
+import { ErrorMessage, inputClass, Modal, primaryButton, secondaryButton, Loading } from "../ui";
 import PlanDialog from "../agenda/PlanDialog";
 import RecipeEditor from "./RecipeEditor";
 import ShareRecipeDialog from "./ShareRecipeDialog";
@@ -81,7 +81,7 @@ export default function RecipeDetailDialog({
   if (!recipe) {
     return (
       <Modal title="Recette" onClose={onClose}>
-        {error ? <ErrorMessage message={error} /> : <p className="text-stone-500">Chargement…</p>}
+        {error ? <ErrorMessage message={error} /> : <Loading />}
       </Modal>
     );
   }

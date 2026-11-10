@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type Inventory, type Item, type ItemUpdate, type Removal, type RemovalReason } from "../../api";
 import { formatQuantity, isoToday, REASON_LABELS, unitLabel } from "../../format";
-import { ErrorMessage, Field, inputClass, Modal, primaryButton, secondaryButton } from "../ui";
+import { ErrorMessage, Field, inputClass, Modal, primaryButton, secondaryButton, Loading } from "../ui";
 
 const MANUAL_REASONS: RemovalReason[] = ["consumed", "discarded", "given", "other"];
 
@@ -184,7 +184,7 @@ export function HistoryDialog({ inventory, onRestored, onClose }: { inventory: I
     <Modal title="Historique des retraits (1 mois)" onClose={onClose}>
       <ErrorMessage message={error} />
       {removals === null ? (
-        <p className="text-stone-500">Chargement…</p>
+        <Loading />
       ) : removals.length === 0 ? (
         <p className="text-stone-500">Aucun retrait ce mois-ci.</p>
       ) : (

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, type Inventory, type InventoryDetail, type MyInvitation, type NotificationSummary, type Role } from "../api";
-import { ErrorMessage, inputClass, primaryButton, secondaryButton } from "../components/ui";
+import { ErrorMessage, inputClass, primaryButton, secondaryButton, Loading } from "../components/ui";
 
 const ROLE_LABELS: Record<Role, string> = { admin: "Administrateur", contributor: "Contributeur", member: "Membre" };
 const ROLE_HELP: Record<Role, string> = {
@@ -86,7 +86,7 @@ export default function SharingPage({ onChanged }: { onChanged: () => void }) {
       <section>
         <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-stone-500">Mes inventaires</h2>
         {inventories === null ? (
-          <p className="text-stone-500">Chargement…</p>
+          <Loading />
         ) : (
           <ul className="space-y-3">
             {inventories.map((inventory) => (

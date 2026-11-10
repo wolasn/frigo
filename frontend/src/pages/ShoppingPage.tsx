@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { api, type Inventory, type ShoppingLine, type ShoppingList } from "../api";
-import { ErrorMessage, Field, inputClass, Modal, primaryButton, secondaryButton } from "../components/ui";
+import { ErrorMessage, Field, inputClass, Modal, primaryButton, secondaryButton, Loading } from "../components/ui";
 import { formatDate, formatQuantity, isoToday } from "../format";
 
 function recommendation(line: ShoppingLine): { text: string; style: string } | null {
@@ -26,8 +26,14 @@ export default function ShoppingPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const [loading, setLoading] = useState(true);
   const load = useCallback(() => {
-    api.shopping().then(setLists).catch(() => setError("Impossible de charger la liste de courses."));
+    setLoading(true);
+    api
+      .shopping()
+      .then(setLists)
+      .catch(() => setError("Impossible de charger la liste de courses."))
+      .finally(() => setLoading(false));
   }, []);
   useEffect(() => {
     load();
@@ -75,7 +81,10 @@ export default function ShoppingPage() {
   return (
     <div className="pb-24">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Courses</h1>
+        <h1 className="flex items-center gap-3 text-2xl font-semibold">
+          Courses
+          {loading && lists !== null && <Loading inline label="Mise à jour…" />}
+        </h1>
         {lists && lists.length > 1 && (
           <div className="flex flex-wrap gap-1.5">
             {lists.map((l) => (
@@ -112,7 +121,7 @@ export default function ShoppingPage() {
       </form>
 
       {list === null ? (
-        <p className="text-stone-500">Chargement…</p>
+        <Loading label="Calcul de la liste de courses…" />
       ) : list.lines.length === 0 ? (
         <div className="rounded-xl border border-dashed border-stone-300 p-8 text-center text-stone-600 dark:border-stone-700 dark:text-stone-400">
           Rien à acheter pour les repas prévus. Planifie des repas dans l'agenda : ce qui manque apparaîtra ici.

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, type Food, type RecipeEdit, type RecipeInput, type Utensil } from "../../api";
 import { unitLabel } from "../../format";
 import FoodPicker from "../inventory/FoodPicker";
-import { ErrorMessage, Field, inputClass, Modal, primaryButton, secondaryButton } from "../ui";
+import { ErrorMessage, Field, inputClass, Modal, primaryButton, secondaryButton, Loading } from "../ui";
 
 const EXTRA_UNITS = ["cs", "cc", "pincee"];
 const EXTRA_LABELS: Record<string, string> = { cs: "c. à soupe", cc: "c. à café", pincee: "pincée(s)" };
@@ -126,7 +126,7 @@ export default function RecipeEditor({ recipeId, onSaved, onClose }: { recipeId:
   if (!loaded) {
     return (
       <Modal title="Recette" onClose={onClose}>
-        {error ? <ErrorMessage message={error} /> : <p className="text-stone-500">Chargement…</p>}
+        {error ? <ErrorMessage message={error} /> : <Loading />}
       </Modal>
     );
   }

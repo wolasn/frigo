@@ -3,7 +3,7 @@ import { api, type Alerts, type Food, type Inventory, type Item } from "../api";
 import AddItemDialog from "../components/inventory/AddItemDialog";
 import { EditDialog, HistoryDialog, RemoveDialog } from "../components/inventory/ItemDialogs";
 import LocationsDialog from "../components/inventory/LocationsDialog";
-import { ErrorMessage, inputClass, primaryButton, secondaryButton } from "../components/ui";
+import { ErrorMessage, inputClass, primaryButton, secondaryButton, Loading } from "../components/ui";
 import { expiryText, formatQuantity, STATUS_STYLES } from "../format";
 
 type Dialog = { type: "add" } | { type: "history" } | { type: "locations" } | { type: "remove"; item: Item } | { type: "edit"; item: Item } | null;
@@ -57,7 +57,7 @@ export default function InventoryPage() {
   }, [items, locationFilter, search]);
 
   if (!inventory) {
-    return error ? <ErrorMessage message={error} /> : <p className="text-stone-500">Chargement…</p>;
+    return error ? <ErrorMessage message={error} /> : <Loading />;
   }
 
   const groups = inventory.locations
@@ -123,7 +123,7 @@ export default function InventoryPage() {
       <ErrorMessage message={error} />
 
       {items === null ? (
-        <p className="text-stone-500">Chargement…</p>
+        <Loading />
       ) : items.length === 0 ? (
         <EmptyState onAdd={() => setDialog({ type: "add" })} />
       ) : groups.length === 0 ? (

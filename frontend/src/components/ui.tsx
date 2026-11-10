@@ -62,3 +62,16 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
     </dialog>
   );
 }
+
+/** Petite roue qui tourne pendant un chargement, avec un texte. `inline` : version discrète à côté d'un titre. */
+export function Loading({ label = "Chargement…", inline = false }: { label?: string; inline?: boolean }) {
+  return (
+    <span role="status" className={(inline ? "inline-flex" : "flex py-6") + " items-center gap-2 text-sm text-stone-500"}>
+      <span
+        aria-hidden
+        className={(inline ? "size-4" : "size-6") + " animate-spin rounded-full border-[3px] border-stone-300 border-t-brand-600 dark:border-stone-700 dark:border-t-brand-500"}
+      />
+      {label}
+    </span>
+  );
+}

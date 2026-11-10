@@ -4,7 +4,7 @@ import PlanDialog from "../components/agenda/PlanDialog";
 import RecipeCardView from "../components/recipes/RecipeCardView";
 import RecipeEditor from "../components/recipes/RecipeEditor";
 import RecipeDetailDialog from "../components/recipes/RecipeDetailDialog";
-import { ErrorMessage, inputClass, primaryButton, secondaryButton } from "../components/ui";
+import { ErrorMessage, inputClass, primaryButton, secondaryButton, Loading } from "../components/ui";
 import { expiryText, formatQuantity, STATUS_STYLES } from "../format";
 
 type Tab = "proposals" | "favorites" | "mine";
@@ -64,6 +64,7 @@ export default function MealsPage() {
   const load = useCallback(() => {
     if (selectedInventories === null || tab === "mine") return;
     setError(null);
+    setCards(null); // affiche l'indicateur de chargement pendant la nouvelle recherche
     const request =
       tab === "favorites"
         ? api.favorites()
@@ -352,7 +353,7 @@ export default function MealsPage() {
         <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-stone-500">Propositions{cards ? ` · ${cards.length}` : ""}</h2>
       )}
       {tab === "mine" ? null : cards === null ? (
-        <p className="text-stone-500">Chargement…</p>
+        <Loading label="Recherche des repas…" />
       ) : cards.length === 0 ? (
         <div className="rounded-xl border border-dashed border-stone-300 p-8 text-center text-stone-600 dark:border-stone-700 dark:text-stone-400">
           {tab === "favorites"
@@ -409,7 +410,7 @@ function MyRecipesTab({ onOpen, refreshKey, onChanged }: { onOpen: (id: string) 
         </button>
       </div>
       {data === null ? (
-        <p className="text-stone-500">Chargement…</p>
+        <Loading />
       ) : (
         <>
           <section>

@@ -5,7 +5,7 @@ import { SLOT_LABELS, SLOTS } from "../components/agenda/PlanDialog";
 import WeekBalancePanel, { useWeekBalance } from "../components/agenda/WeekBalancePanel";
 import SuggestDialog, { type SuggestSettings } from "../components/agenda/SuggestDialog";
 import RecipeDetailDialog from "../components/recipes/RecipeDetailDialog";
-import { ErrorMessage, primaryButton, secondaryButton } from "../components/ui";
+import { ErrorMessage, Loading, primaryButton, secondaryButton } from "../components/ui";
 import { isoToday } from "../format";
 
 const AGENDA_COLORS = [
@@ -51,8 +51,14 @@ export default function AgendaPage() {
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
   const today = isoToday();
 
+  const [loading, setLoading] = useState(true);
   const load = useCallback(() => {
-    api.agenda(days[0], days[6]).then(setMeals).catch(() => setError("Impossible de charger l'agenda."));
+    setLoading(true);
+    api
+      .agenda(days[0], days[6])
+      .then(setMeals)
+      .catch(() => setError("Impossible de charger l'agenda."))
+      .finally(() => setLoading(false));
     api.pastUnmarked().then(setPastUnmarked).catch(() => setPastUnmarked([]));
   }, [days]);
   useEffect(load, [load]);
@@ -179,7 +185,10 @@ export default function AgendaPage() {
   return (
     <div>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Agenda</h1>
+        <h1 className="flex items-center gap-3 text-2xl font-semibold">
+          Agenda
+          {loading && <Loading inline label="Chargement des repas…" />}
+        </h1>
         <div className="flex flex-wrap items-center gap-2">
           <button className={primaryButton + " px-3 py-1.5 text-sm"} onClick={() => setSuggesting(true)} disabled={!canPlan(target)} title={canPlan(target) ? undefined : "Seuls les contributeurs et administrateurs planifient dans cet agenda"}>
             Proposer des repas
@@ -271,7 +280,7 @@ export default function AgendaPage() {
         Glisse un repas vers une autre case pour le déplacer (ou ouvre-le pour changer sa date). Pour en ajouter, planifie-le depuis l'onglet Repas ou utilise « Proposer des repas » (ou le + d'un créneau vide).
       </p>
 
-      <div className="grid gap-3 lg:grid-cols-7">
+      <div className={"grid gap-3 transition-opacity lg:grid-cols-7" + (loading ? " opacity-50" : "")} aria-busy={loading}>
         {days.map((day) => {
           const past = day < today;
           return (

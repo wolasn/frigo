@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, type Utensil } from "../api";
-import { ErrorMessage, inputClass, secondaryButton } from "../components/ui";
+import { ErrorMessage, inputClass, secondaryButton, Loading } from "../components/ui";
 
 const CATEGORIES: { id: Utensil["category"]; label: string }[] = [
   { id: "cooking", label: "Cuisson" },
@@ -57,7 +57,7 @@ export default function UtensilsPage() {
       </p>
       <ErrorMessage message={error} />
       {utensils === null ? (
-        <p className="text-stone-500">Chargement…</p>
+        <Loading />
       ) : (
         <div className="grid gap-5 sm:grid-cols-3">
           {CATEGORIES.map((c) => (
