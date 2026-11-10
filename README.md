@@ -28,7 +28,7 @@ Ajouter `--replace` pour remplacer le super-administrateur actuel.
 
 ## Catalogue de départ
 
-Charge ou met à jour les catégories, ~100 aliments courants, leurs durées de conservation
+Charge ou met à jour les catégories, ~290 aliments courants (au moins 10 par catégorie), leurs durées de conservation
 indicatives et les conversions d'unités (relançable sans créer de doublons). La même commande
 remplit les valeurs nutritionnelles depuis la table Ciqual puis recalcule le score santé des
 recettes personnelles et IA :
