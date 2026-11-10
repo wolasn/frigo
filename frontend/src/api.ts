@@ -118,6 +118,7 @@ export type RecipeCard = {
   is_favorite: boolean;
   is_pinned: boolean;
   times_cooked: number;
+  last_cooked_on: string | null;
   servings: number;
   missing: string[];
   expiring_used: string[];
@@ -145,6 +146,9 @@ export type ProposalQuery = {
   diet: "none" | "vegetarian" | "vegan";
   include_missing_utensils: boolean;
   inventory_ids?: string[];
+  max_difficulty?: "easy" | "medium" | "hard";
+  max_minutes?: number;
+  min_health?: number;
 };
 
 export type Utensil = { id: string; name: string; category: "cooking" | "preparation" | "container"; owned: boolean; is_custom: boolean };

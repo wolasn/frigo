@@ -362,7 +362,7 @@ def mark_done(meal_id: uuid.UUID, body: DoneIn, session: DbSession, user: Curren
                                   times_cooked=0)
             session.add(meta)
         meta.times_cooked = (meta.times_cooked or 0) + 1
-        meta.last_cooked_on = meal.meal_date
+        meta.last_cooked_on = max(filter(None, [meta.last_cooked_on, meal.meal_date]))  # la plus récente
         if body.leftover_portions:
             _create_leftover(session, user, meal, body.leftover_portions)
 

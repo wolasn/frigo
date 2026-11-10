@@ -193,6 +193,7 @@ export default function AgendaPage() {
           <button className={secondaryButton + " px-3 py-1.5"} onClick={() => setWeekStart(addDays(weekStart, 7))} aria-label="Semaine suivante">
             ›
           </button>
+          <WeekPicker weekStart={weekStart} onPick={(day) => setWeekStart(mondayOf(day))} />
         </div>
       </div>
 
@@ -440,5 +441,40 @@ function DraftCard({
         </button>
       </span>
     </div>
+  );
+}
+
+/** Bouton « semaine du … » : ouvre le calendrier du navigateur ; le jour choisi donne sa semaine. */
+function WeekPicker({ weekStart, onPick }: { weekStart: string; onPick: (day: string) => void }) {
+  const input = useRef<HTMLInputElement>(null);
+  const label = (iso: string) => new Date(`${iso}T12:00:00`).toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
+  return (
+    <span className="relative">
+      <button
+        className={secondaryButton + " px-3 py-1.5 text-sm"}
+        onClick={() => {
+          const el = input.current;
+          if (!el) return;
+          try {
+            el.showPicker();
+          } catch {
+            el.focus();
+            el.click();
+          }
+        }}
+        aria-label="Choisir la semaine"
+      >
+        📅 {label(weekStart)} – {label(addDays(weekStart, 6))}
+      </button>
+      <input
+        ref={input}
+        type="date"
+        tabIndex={-1}
+        aria-hidden
+        className="pointer-events-none absolute bottom-0 left-0 h-0 w-0 opacity-0"
+        value={weekStart}
+        onChange={(e) => e.target.value && onPick(e.target.value)}
+      />
+    </span>
   );
 }

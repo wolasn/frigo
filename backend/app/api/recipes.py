@@ -56,6 +56,7 @@ class RecipeCard(BaseModel):
     is_favorite: bool
     is_pinned: bool
     times_cooked: int
+    last_cooked_on: date | None = None
     # Évaluation par rapport au stock
     servings: int
     missing: list[str]
@@ -122,6 +123,7 @@ def _card(e: Evaluation, servings: int) -> dict:
         rating=m.rating if m else None, comment=m.comment if m else None,
         is_favorite=bool(m and m.is_favorite), is_pinned=bool(m and m.is_pinned),
         times_cooked=m.times_cooked if m else 0,
+        last_cooked_on=m.last_cooked_on if m else None,
         servings=servings, missing=e.missing, expiring_used=e.expiring_used,
         missing_utensils=e.missing_utensils, disliked=e.disliked,
     )
@@ -173,9 +175,12 @@ def list_proposals(
     inventory_ids: Annotated[list[uuid.UUID] | None, Query()] = None,
     include_missing_utensils: bool = False,
     max_minutes: Annotated[int | None, Query(ge=5, le=600)] = None,
+    max_difficulty: Difficulty | None = None,
+    min_health: Annotated[float | None, Query(ge=0, le=10)] = None,
 ) -> list[RecipeCard]:
     limit = 0 if mode == "inventory" else max_purchases
     options = _options(session, user, servings, on, inventory_ids, limit, diet, include_missing_utensils, max_minutes)
+    options.max_difficulty, options.min_health = max_difficulty, min_health
     return [RecipeCard(**_card(e, options.servings)) for e in propose(session, user, options)]
 
 

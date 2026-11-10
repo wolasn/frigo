@@ -20,6 +20,9 @@ export default function MealsPage() {
   const [maxPurchases, setMaxPurchases] = useState("3");
   const [diet, setDiet] = useState<ProposalQuery["diet"]>("none");
   const [withMissingUtensils, setWithMissingUtensils] = useState(false);
+  const [maxDifficulty, setMaxDifficulty] = useState<"" | "easy" | "medium" | "hard">("");
+  const [maxMinutes, setMaxMinutes] = useState("");
+  const [minHealth, setMinHealth] = useState("");
   const [cards, setCards] = useState<RecipeCard[] | null>(null);
   const [leftovers, setLeftovers] = useState<Item[]>([]);
   const [planLeftover, setPlanLeftover] = useState<Item | null>(null);
@@ -71,9 +74,12 @@ export default function MealsPage() {
             diet,
             include_missing_utensils: withMissingUtensils,
             inventory_ids: selectedInventories,
+            max_difficulty: maxDifficulty || undefined,
+            max_minutes: maxMinutes ? Number(maxMinutes) : undefined,
+            min_health: minHealth ? Number(minHealth) : undefined,
           });
     request.then(setCards).catch((err) => setError(err instanceof Error ? err.message : "Chargement impossible."));
-  }, [tab, servings, mode, maxPurchases, diet, withMissingUtensils, selectedInventories]);
+  }, [tab, servings, mode, maxPurchases, diet, withMissingUtensils, selectedInventories, maxDifficulty, maxMinutes, minHealth]);
 
   useEffect(load, [load]);
 
@@ -216,6 +222,36 @@ export default function MealsPage() {
                 <option value="none">Tous</option>
                 <option value="vegetarian">Végétarien</option>
                 <option value="vegan">Vegan</option>
+              </select>
+            </label>
+            <label className="text-sm">
+              <span className="mb-1 block font-medium">Difficulté</span>
+              <select className={inputClass} value={maxDifficulty} onChange={(e) => setMaxDifficulty(e.target.value as typeof maxDifficulty)}>
+                <option value="">Toutes</option>
+                <option value="easy">Facile</option>
+                <option value="medium">Moyenne au plus</option>
+              </select>
+            </label>
+            <label className="text-sm">
+              <span className="mb-1 block font-medium">Temps total</span>
+              <select className={inputClass} value={maxMinutes} onChange={(e) => setMaxMinutes(e.target.value)}>
+                <option value="">Peu importe</option>
+                {[15, 30, 45, 60, 90].map((m) => (
+                  <option key={m} value={m}>
+                    {m} min au plus
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm">
+              <span className="mb-1 block font-medium">Score santé</span>
+              <select className={inputClass} value={minHealth} onChange={(e) => setMinHealth(e.target.value)}>
+                <option value="">Tous</option>
+                {[5, 6, 7, 8].map((s) => (
+                  <option key={s} value={s}>
+                    {s}/10 ou plus
+                  </option>
+                ))}
               </select>
             </label>
             <label className="flex items-center gap-2 text-sm sm:col-span-2">

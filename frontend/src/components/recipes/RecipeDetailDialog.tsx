@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type IngredientStatus, type RecipeDetail } from "../../api";
+import { formatDate } from "../../format";
 import { ErrorMessage, inputClass, Modal, primaryButton, secondaryButton } from "../ui";
 import PlanDialog from "../agenda/PlanDialog";
 import RecipeEditor from "./RecipeEditor";
@@ -147,7 +148,11 @@ export default function RecipeDetailDialog({
               </button>
             ))}
           </div>
-          {recipe.times_cooked > 0 && <span className="text-sm text-stone-500">Déjà cuisiné {recipe.times_cooked}×</span>}
+          {recipe.times_cooked > 0 && (
+            <span className="text-sm text-stone-500">
+              Déjà cuisiné {recipe.times_cooked}×{recipe.last_cooked_on && `, la dernière fois le ${formatDate(recipe.last_cooked_on)}`}
+            </span>
+          )}
         </div>
 
         <div className="space-y-2">

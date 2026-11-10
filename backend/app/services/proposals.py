@@ -30,7 +30,7 @@ from app.models import (
     UserUtensil,
     Utensil,
 )
-from app.models.enums import DateType, Diet, ExclusionReason, ItemKind, RecipeStatus, UtensilRequirement
+from app.models.enums import DateType, Diet, Difficulty, ExclusionReason, ItemKind, RecipeStatus, UtensilRequirement
 from app.services.ingredients import parse_ingredient
 from app.services.planning import reserved_by_item
 from app.services.recipes import visible_recipes_clause
@@ -49,6 +49,9 @@ UNIT_DISPLAY = {
 }
 
 
+DIFFICULTY_ORDER = [Difficulty.EASY, Difficulty.MEDIUM, Difficulty.HARD]
+
+
 @dataclass
 class Options:
     servings: int
@@ -58,6 +61,8 @@ class Options:
     diet: Diet = Diet.NONE
     include_missing_utensils: bool = False
     max_minutes: int | None = None
+    max_difficulty: Difficulty | None = None  # facile < moyen < difficile ; difficulté inconnue acceptée
+    min_health: float | None = None  # recettes sans score exclues quand ce filtre est demandé
 
 
 @dataclass
@@ -280,6 +285,11 @@ def propose(session: Session, user: User, options: Options, limit: int = 60) -> 
     recipes = list(session.scalars(query))
     if options.max_minutes:
         recipes = [r for r in recipes if (r.prep_minutes or 0) + (r.cook_minutes or 0) <= options.max_minutes]
+    if options.max_difficulty:
+        allowed = DIFFICULTY_ORDER[: DIFFICULTY_ORDER.index(options.max_difficulty) + 1]
+        recipes = [r for r in recipes if r.difficulty is None or r.difficulty in allowed]
+    if options.min_health is not None:
+        recipes = [r for r in recipes if r.health_score is not None and float(r.health_score) >= options.min_health]
 
     results = []
     for evaluation in evaluate_recipes(session, user, options, recipes):
