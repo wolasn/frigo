@@ -6,12 +6,12 @@
 """
 
 import hmac
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Header, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from app.api.deps import CurrentUser
+from app.api.deps import CurrentUser, DbSession
 from app.db import check_database
 from app.models.enums import UserRole
 from app.monitoring import read_status, run_check
@@ -57,3 +57,39 @@ def db_status(user: CurrentUser) -> StatusOut:
 def check_now(user: CurrentUser) -> StatusOut:
     _require_super_admin(user)
     return StatusOut(**vars(run_check(retries=1)))
+
+
+class SettingsOut(BaseModel):
+    photo_engine: Literal["claude", "local"]
+    photo_local_url: str
+    photo_local_model: str
+
+
+class SettingsIn(BaseModel):
+    photo_engine: Literal["claude", "local"] | None = None
+    photo_local_url: str | None = Field(default=None, max_length=200, pattern=r"^https?://")
+    photo_local_model: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+def _settings(session) -> SettingsOut:
+    from app.services.settings import get_setting
+
+    return SettingsOut(**{key: get_setting(session, key) for key in SettingsOut.model_fields})
+
+
+@router.get("/settings")
+def read_settings(session: DbSession, user: CurrentUser) -> SettingsOut:
+    """Paramètres globaux : mode d'analyse photo appliqué à tout le monde."""
+    _require_super_admin(user)
+    return _settings(session)
+
+
+@router.patch("/settings")
+def update_settings(body: SettingsIn, session: DbSession, user: CurrentUser) -> SettingsOut:
+    from app.services.settings import set_setting
+
+    _require_super_admin(user)
+    for key, value in body.model_dump(exclude_none=True).items():
+        set_setting(session, key, value.strip() if isinstance(value, str) else value, user.id)
+    session.commit()
+    return _settings(session)

@@ -9,6 +9,9 @@ services:
         INSTALL_DEV: "true"
     ports:
       - "8000:8000"
+    # Mode photo « modèle local » : Ollama tourne sur la machine hôte (Windows ou serveur).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       APP_TIMEZONE: Europe/Paris
     secrets:

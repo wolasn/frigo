@@ -17,6 +17,7 @@ from app.api import (
     catalog,
     inventory,
     locations,
+    photo,
     my_recipes,
     notifications,
     preferences,
@@ -39,7 +40,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Frigo & Repas", docs_url="/api/docs", openapi_url="/api/openapi.json", lifespan=lifespan)
-for module in (auth, catalog, inventory, locations, recipes, my_recipes, utensils, agenda, shopping, sharing, notifications,
+for module in (auth, catalog, inventory, locations, photo, recipes, my_recipes, utensils, agenda, shopping, sharing, notifications,
                preferences, admin):
     app.include_router(module.router)
 

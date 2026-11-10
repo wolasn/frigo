@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { api, type Category, type Food, type Preferences, type User } from "../api";
+import { api, type AdminSettings, type Category, type Food, type Preferences, type User } from "../api";
 import { ErrorMessage, Field, inputClass, primaryButton, secondaryButton, Loading } from "../components/ui";
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
@@ -121,6 +121,8 @@ export default function PreferencesPage({ user, onUserChanged, onAccountDeleted 
       <h1 className="text-2xl font-semibold">Préférences</h1>
       <ErrorMessage message={error} />
       {message && <p className="rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-700 dark:bg-stone-800 dark:text-brand-500">{message}</p>}
+
+      {user.role === "super_admin" && <AdminSettingsSection />}
 
       <Section title="Repas" hint="Valeurs utilisées par défaut dans les propositions de repas.">
         <div className="grid max-w-md grid-cols-2 gap-3">
@@ -302,5 +304,69 @@ export default function PreferencesPage({ user, onUserChanged, onAccountDeleted 
         </form>
       </section>
     </div>
+  );
+}
+
+/** Paramètres globaux (super-administrateur) : mode d'analyse photo appliqué à tout le monde. */
+function AdminSettingsSection() {
+  const [settings, setSettings] = useState<AdminSettings | null>(null);
+  const [url, setUrl] = useState("");
+  const [model, setModel] = useState("");
+  const [saved, setSaved] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .adminSettings()
+      .then((s) => {
+        setSettings(s);
+        setUrl(s.photo_local_url);
+        setModel(s.photo_local_model);
+      })
+      .catch(() => setFailure("Impossible de lire les paramètres globaux."));
+  }, []);
+
+  async function save(change: Partial<AdminSettings>) {
+    setFailure(null);
+    try {
+      setSettings(await api.updateAdminSettings(change));
+      setSaved("Enregistré.");
+      setTimeout(() => setSaved(null), 2000);
+    } catch (err) {
+      setFailure(err instanceof Error ? err.message : "Enregistrement impossible.");
+    }
+  }
+
+  if (!settings) return failure ? <ErrorMessage message={failure} /> : null;
+  return (
+    <Section title="Administration · analyse photo" hint="Réglage appliqué à tous les utilisateurs.">
+      <div className="space-y-3 text-sm">
+        <label className="flex items-start gap-2">
+          <input type="radio" className="mt-1" checked={settings.photo_engine === "claude"} onChange={() => save({ photo_engine: "claude" })} />
+          <span>
+            <span className="font-medium">API Claude</span>
+            <span className="block text-stone-500">Précis, lit les dates sur les emballages ; quelques centimes par analyse, la photo quitte le PC le temps de l'analyse.</span>
+          </span>
+        </label>
+        <label className="flex items-start gap-2">
+          <input type="radio" className="mt-1" checked={settings.photo_engine === "local"} onChange={() => save({ photo_engine: "local" })} />
+          <span>
+            <span className="font-medium">Modèle local (Ollama)</span>
+            <span className="block text-stone-500">Gratuit, rien ne sort du PC ; moins précis et plus lent, demande une carte graphique.</span>
+          </span>
+        </label>
+        {settings.photo_engine === "local" && (
+          <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+            <input className={inputClass} value={url} onChange={(e) => setUrl(e.target.value)} aria-label="Adresse d'Ollama" placeholder="http://host.docker.internal:11434" />
+            <input className={inputClass} value={model} onChange={(e) => setModel(e.target.value)} aria-label="Modèle" placeholder="qwen2.5vl:7b" />
+            <button className={secondaryButton} onClick={() => save({ photo_local_url: url.trim(), photo_local_model: model.trim() })}>
+              Enregistrer
+            </button>
+          </div>
+        )}
+        {saved && <p className="text-brand-700 dark:text-brand-500">{saved}</p>}
+        <ErrorMessage message={failure} />
+      </div>
+    </Section>
   );
 }

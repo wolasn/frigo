@@ -3,10 +3,11 @@ import { api, type Alerts, type Food, type Inventory, type Item } from "../api";
 import AddItemDialog from "../components/inventory/AddItemDialog";
 import { EditDialog, HistoryDialog, RemoveDialog } from "../components/inventory/ItemDialogs";
 import LocationsDialog from "../components/inventory/LocationsDialog";
+import PhotoScanDialog from "../components/inventory/PhotoScanDialog";
 import { ErrorMessage, inputClass, primaryButton, secondaryButton, Loading } from "../components/ui";
 import { expiryText, formatQuantity, STATUS_STYLES } from "../format";
 
-type Dialog = { type: "add" } | { type: "history" } | { type: "locations" } | { type: "remove"; item: Item } | { type: "edit"; item: Item } | null;
+type Dialog = { type: "add" } | { type: "history" } | { type: "locations" } | { type: "photo" } | { type: "remove"; item: Item } | { type: "edit"; item: Item } | null;
 
 export default function InventoryPage() {
   const [inventories, setInventories] = useState<Inventory[]>([]);
@@ -18,6 +19,7 @@ export default function InventoryPage() {
   const [search, setSearch] = useState("");
   const [dialog, setDialog] = useState<Dialog>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const loadInventories = useCallback(() => {
     api
@@ -86,6 +88,9 @@ export default function InventoryPage() {
           <button className={secondaryButton} onClick={() => setDialog({ type: "history" })}>
             Historique
           </button>
+          <button className={secondaryButton} onClick={() => setDialog({ type: "photo" })}>
+            📷 Photo
+          </button>
           <button className={primaryButton} onClick={() => setDialog({ type: "add" })}>
             + Ajouter
           </button>
@@ -121,6 +126,11 @@ export default function InventoryPage() {
       </div>
 
       <ErrorMessage message={error} />
+      {notice && (
+        <p className="mb-4 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300" role="status">
+          {notice}
+        </p>
+      )}
 
       {items === null ? (
         <Loading />
@@ -160,6 +170,18 @@ export default function InventoryPage() {
       )}
       {dialog?.type === "remove" && <RemoveDialog item={dialog.item} onDone={reload} onClose={() => setDialog(null)} />}
       {dialog?.type === "edit" && <EditDialog item={dialog.item} inventory={inventory} onDone={reload} onClose={() => setDialog(null)} />}
+      {dialog?.type === "photo" && (
+        <PhotoScanDialog
+          inventories={inventories}
+          inventoryId={inventory.id}
+          onDone={(message) => {
+            setNotice(message);
+            reload();
+          }}
+          onManual={() => setDialog({ type: "add" })}
+          onClose={() => setDialog((d) => (d?.type === "photo" ? null : d))}
+        />
+      )}
       {dialog?.type === "locations" && (
         <LocationsDialog
           inventoryId={inventory.id}

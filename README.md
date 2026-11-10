@@ -59,6 +59,24 @@ recettes par recherche : celles déjà en base (même adresse ou même titre) so
 docker compose exec app python -m app.cli import-marmiton-selection
 ```
 
+## Inventaire par photo
+
+Bouton « 📷 Photo » de la page Inventaire : prendre des photos (caméra dans la page) ou en importer,
+jusqu'6 par analyse, puis corriger la liste détectée avant de l'ajouter. Les photos sont réduites
+dans le navigateur, envoyées en mémoire, jamais enregistrées (ni sur le disque, ni en base) ;
+seules les lignes détectées sont gardées 30 jours.
+
+- La caméra dans la page demande une adresse sécurisée (https, ou localhost sur le PC). Depuis un
+  téléphone sur le Wi-Fi (http://adresse-du-pc:8000), le bouton ouvre l'appareil photo du téléphone.
+- Moteur choisi par le super-administrateur (Préférences → Administration) : API Claude (défaut)
+  ou modèle local Ollama. Pour le mode local sur le PC :
+
+```
+ollama pull qwen2.5vl:7b
+```
+
+  L'application joint Ollama sur `http://host.docker.internal:11434` (modifiable dans le réglage).
+
 ## Recettes Marmiton
 
 Les recettes sont lues sur Marmiton (données structurées des fiches), au plus une requête toutes les 1,5 s,

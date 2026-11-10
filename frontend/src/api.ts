@@ -62,6 +62,38 @@ export type Food = {
 
 export type Category = { id: string; name: string; aisle: string };
 
+export type ScanLine = {
+  id: string;
+  label: string;
+  food: Food | null;
+  quantity: number | null;
+  unit: string | null;
+  storage_location_id: string | null;
+  expires_on: string | null;
+  date_type: DateType | null;
+  confidence: number;
+  doubtful: boolean;
+  question: string | null;
+  options: string[];
+  merge_with: { item_id: string; expires_on: string } | null;
+};
+
+export type PhotoScan = { id: string; inventory_id: string; engine: "claude" | "local"; status: string; lines: ScanLine[] };
+
+export type ScanLineEdit = {
+  id: string;
+  include: boolean;
+  food_id?: string;
+  quantity?: number;
+  unit?: string;
+  storage_location_id?: string;
+  expires_on?: string;
+  date_type?: DateType;
+  merge?: boolean;
+};
+
+export type AdminSettings = { photo_engine: "claude" | "local"; photo_local_url: string; photo_local_model: string };
+
 export type RemovalReason = "consumed" | "discarded" | "given" | "cooked" | "other";
 
 export type Removal = {
@@ -354,6 +386,13 @@ export const api = {
   removals: (inventoryId: string) => request<Removal[]>("GET", `/api/inventories/${inventoryId}/removals`),
   restore: (removalId: string) => request<Item>("POST", `/api/removals/${removalId}/restore`),
 
+  analyzePhotos: (photos: { media_type: string; data: string }[], inventory_id?: string) =>
+    request<PhotoScan>("POST", "/api/photo-scans", { photos, inventory_id }),
+  validateScan: (id: string, lines: ScanLineEdit[]) =>
+    request<{ added: number; merged: number }>("POST", `/api/photo-scans/${id}/validate`, { lines }),
+  cancelScan: (id: string) => request<void>("POST", `/api/photo-scans/${id}/cancel`),
+  adminSettings: () => request<AdminSettings>("GET", "/api/admin/settings"),
+  updateAdminSettings: (body: Partial<AdminSettings>) => request<AdminSettings>("PATCH", "/api/admin/settings", body),
   searchFoods: (q: string) => request<Food[]>("GET", `/api/foods?q=${encodeURIComponent(q)}`),
   createFood: (name: string, category_id: string, reference_unit: Food["reference_unit"]) =>
     request<Food>("POST", "/api/foods", { name, category_id, reference_unit }),
