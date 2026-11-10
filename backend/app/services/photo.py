@@ -188,6 +188,9 @@ def analyze_with_claude(photos: list[Photo], catalogue_names: list[str], today: 
 
 DEFAULT_OLLAMA_URL = "http://host.docker.internal:11434"
 DEFAULT_LOCAL_MODEL = "qwen2.5vl:7b"
+# Connexion courte : un PC éteint ou hors réseau est détecté vite, et l'API Claude prend le relais.
+# Lecture longue : un modèle local sur carte graphique peut mettre plusieurs minutes à répondre.
+OLLAMA_TIMEOUT = httpx.Timeout(600.0, connect=5.0)
 
 
 def analyze_with_ollama(photos: list[Photo], catalogue_names: list[str], today: date, url: str, model: str,
@@ -203,7 +206,7 @@ def analyze_with_ollama(photos: list[Photo], catalogue_names: list[str], today: 
         ],
     }
     try:
-        with httpx.Client(timeout=600, transport=transport) as client:
+        with httpx.Client(timeout=OLLAMA_TIMEOUT, transport=transport) as client:
             response = client.post(f"{url.rstrip('/')}/api/chat", json=body)
     except httpx.HTTPError:
         raise AiError(f"Le modèle local ne répond pas ({url}) : Ollama est-il lancé ?", "temporary") from None

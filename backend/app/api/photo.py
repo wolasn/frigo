@@ -7,6 +7,7 @@ de l'analyse. Seul le texte extrait (les lignes détectées) est gardé, 30 jour
 
 import base64
 import binascii
+import logging
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -48,6 +49,8 @@ from app.services.planning import recompute_reservations, scope_of
 from app.services.settings import get_setting
 from app.services.units import UnitError, normalize_unit, to_reference
 
+logger = logging.getLogger("frigo.photo")
+
 router = APIRouter(prefix="/api/photo-scans", tags=["photo"])
 
 DAILY_LIMIT = 30  # analyses par utilisateur et par jour : chaque analyse par l'API coûte quelques centimes
@@ -88,9 +91,10 @@ class LineOut(BaseModel):
 class ScanOut(BaseModel):
     id: uuid.UUID
     inventory_id: uuid.UUID
-    engine: ScanEngine
+    engine: ScanEngine  # moteur qui a réellement analysé
     status: ScanStatus
     lines: list[LineOut]
+    fallback: bool = False  # modèle local injoignable : l'API Claude a pris le relais
 
 
 class LineIn(BaseModel):
@@ -200,10 +204,20 @@ def analyze(body: ScanIn, session: DbSession, user: CurrentUser) -> ScanOut:
     usage = recorder(session, user, "photo")
     matcher = FoodMatcher(session)
     catalogue = sorted({f.name for f in matcher.foods.values() if not f.is_always_infinite})
+    fallback = False
     try:
         if engine == ScanEngine.LOCAL:
-            items = analyze_with_ollama(photos, catalogue, today(), get_setting(session, "photo_local_url"),
-                                        get_setting(session, "photo_local_model"), on_usage=usage)
+            try:
+                items = analyze_with_ollama(photos, catalogue, today(), get_setting(session, "photo_local_url"),
+                                            get_setting(session, "photo_local_model"), on_usage=usage)
+            except AiError as error:
+                if not get_setting(session, "photo_local_fallback"):
+                    raise
+                # PC éteint, en veille ou hors réseau, modèle absent… : l'API Claude prend le relais
+                logger.warning("Modèle local indisponible (%s) : analyse par l'API Claude", error)
+                engine, fallback = ScanEngine.CLAUDE, True
+                scan.engine = engine
+                items = analyze_with_claude(photos, catalogue, today(), on_usage=usage)
         else:
             items = analyze_with_claude(photos, catalogue, today(), on_usage=usage)
     except AiError as error:
@@ -238,7 +252,7 @@ def analyze(body: ScanIn, session: DbSession, user: CurrentUser) -> ScanOut:
         ))
     scan.status, scan.finished_at = ScanStatus.REVIEW, datetime.now(UTC)
     session.commit()
-    return _scan_out(session, user, scan)
+    return _scan_out(session, user, scan).model_copy(update={"fallback": fallback})
 
 
 @router.get("/{scan_id}")

@@ -400,6 +400,18 @@ function AdminSettingsSection() {
             <button className={secondaryButton} onClick={() => save({ photo_local_url: url.trim(), photo_local_model: model.trim() })}>
               Enregistrer
             </button>
+            <label className="flex items-start gap-2 sm:col-span-3">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={settings.photo_local_fallback}
+                onChange={(e) => save({ photo_local_fallback: e.target.checked })}
+              />
+              <span>
+                Si le modèle local ne répond pas (PC éteint, en veille ou hors réseau), analyser avec l'API Claude
+                <span className="block text-stone-500">Sinon, l'analyse échoue et l'aliment s'ajoute à la main.</span>
+              </span>
+            </label>
           </div>
         )}
         <label className="block border-t border-stone-200 pt-3 dark:border-stone-800">

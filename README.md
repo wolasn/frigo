@@ -78,6 +78,25 @@ ollama pull qwen2.5vl:7b
 ```
 
   L'application joint Ollama sur `http://host.docker.internal:11434` (modifiable dans le réglage).
+- Repli : si le modèle local ne répond pas (PC éteint, en veille, hors réseau, modèle absent), l'analyse
+  passe par l'API Claude, et l'écran d'analyse l'indique. Délai de connexion : 5 s. Le repli se coupe
+  dans le même réglage.
+
+### Application sur un serveur, modèle sur le PC Windows
+
+Le serveur doit pouvoir joindre Ollama sur le PC. Ollama n'a aucun mot de passe : ne jamais l'ouvrir
+sur Internet (pas de redirection de port sur la box). Passer par un réseau privé, par exemple
+Tailscale (gratuit) installé sur le PC et sur le serveur :
+
+1. Sur le PC, faire écouter Ollama sur le réseau (variable utilisateur, puis relancer Ollama) :
+   `setx OLLAMA_HOST 0.0.0.0:11434`
+2. Pare-feu Windows : autoriser le port TCP 11434 en entrée seulement depuis le réseau Tailscale
+   (100.64.0.0/10), ou depuis l'adresse du serveur s'il est sur le même réseau local.
+3. Dans Préférences → Administration, adresse d'Ollama : `http://<adresse-tailscale-du-pc>:11434`
+   (ou `http://<ip-du-pc-sur-le-réseau-local>:11434`), modèle `qwen2.5vl:7b`.
+4. Vérifier depuis le serveur : `curl http://<adresse-du-pc>:11434/api/version`.
+
+Quand le PC est éteint ou en veille, les analyses partent sur l'API Claude.
 
 ## Recettes Marmiton
 

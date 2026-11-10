@@ -13,6 +13,7 @@ DEFAULTS: dict[str, Any] = {
     "photo_engine": "claude",  # claude | local
     "photo_local_url": DEFAULT_OLLAMA_URL,
     "photo_local_model": DEFAULT_LOCAL_MODEL,
+    "photo_local_fallback": True,  # modèle local injoignable : passer par l'API Claude
     "ai_recipe_model": DEFAULT_RECIPE_MODEL,  # claude-opus-5-5 | claude-sonnet-5-5 | claude-haiku-5-5
 }
 

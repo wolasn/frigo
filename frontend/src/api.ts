@@ -78,7 +78,7 @@ export type ScanLine = {
   merge_with: { item_id: string; expires_on: string } | null;
 };
 
-export type PhotoScan = { id: string; inventory_id: string; engine: "claude" | "local"; status: string; lines: ScanLine[] };
+export type PhotoScan = { id: string; inventory_id: string; engine: "claude" | "local"; status: string; lines: ScanLine[]; fallback?: boolean };
 
 export type ScanLineEdit = {
   id: string;
@@ -101,6 +101,7 @@ export type AdminSettings = {
   photo_engine: "claude" | "local";
   photo_local_url: string;
   photo_local_model: string;
+  photo_local_fallback: boolean;
   ai_recipe_model: "claude-opus-5-5" | "claude-sonnet-5-5" | "claude-haiku-5-5";
 };
 

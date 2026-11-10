@@ -155,3 +155,27 @@ def test_reglage_du_mode_par_le_super_admin(client, db_session, alice, monkeypat
     monkeypatch.setattr(photo_api, "analyze_with_ollama", local)
     scan = client.post("/api/photo-scans", json={"photos": [{"media_type": "image/jpeg", "data": PIXEL}]}).json()
     assert scan["engine"] == "local" and used["model"] == "llava:7b"
+
+
+def test_repli_sur_claude_si_le_modele_local_ne_repond_pas(client, db_session, alice, monkeypatch):
+    from app.services.settings import set_setting
+
+    admin = db_session.scalar(select(User).where(User.username == "alice"))
+    set_setting(db_session, "photo_engine", "local", admin.id)
+    db_session.flush()
+    unreachable = httpx.MockTransport(lambda r: (_ for _ in ()).throw(httpx.ConnectError("PC éteint")))
+    real_ollama = photo_api.analyze_with_ollama
+    monkeypatch.setattr(photo_api, "analyze_with_ollama",
+                        lambda *a, **kw: real_ollama(*a, transport=unreachable, **kw))
+
+    response = client.post("/api/photo-scans", json={"photos": [{"media_type": "image/jpeg", "data": PIXEL}]})
+    assert response.status_code == 201, response.text
+    scan = response.json()
+    assert scan["engine"] == "claude" and scan["fallback"] is True
+    assert db_session.scalar(select(PhotoScan.engine).where(PhotoScan.id == scan["id"])) == "claude"
+    assert any(l["label"] == "Carotte" for l in scan["lines"])
+
+    set_setting(db_session, "photo_local_fallback", False, admin.id)  # repli coupé : l'analyse échoue
+    db_session.flush()
+    response = client.post("/api/photo-scans", json={"photos": [{"media_type": "image/jpeg", "data": PIXEL}]})
+    assert response.status_code == 503 and "Ollama" in response.json()["detail"]

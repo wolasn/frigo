@@ -429,7 +429,10 @@ function Review({
           Annuler
         </button>
       </div>
-      <p className="text-xs text-stone-500">Analyse : {scan.engine === "claude" ? "API Claude" : "modèle local"}.</p>
+      <p className="text-xs text-stone-500">
+        Analyse : {scan.engine === "claude" ? "API Claude" : "modèle local"}
+        {scan.fallback && " (le modèle local n'a pas répondu)"}.
+      </p>
     </div>
   );
 }
