@@ -406,7 +406,8 @@ export const api = {
     request<UsageCall[]>("GET", `/api/admin/ai-usage/${encodeURIComponent(userKey)}?${query({ month })}`),
   adminSettings: () => request<AdminSettings>("GET", "/api/admin/settings"),
   updateAdminSettings: (body: Partial<AdminSettings>) => request<AdminSettings>("PATCH", "/api/admin/settings", body),
-  searchFoods: (q: string) => request<Food[]>("GET", `/api/foods?q=${encodeURIComponent(q)}`),
+  searchFoods: (q: string, categoryId?: string) =>
+    request<Food[]>("GET", `/api/foods?${query({ q, category_id: categoryId || undefined, limit: categoryId ? 100 : undefined })}`),
   createFood: (name: string, category_id: string, reference_unit: Food["reference_unit"]) =>
     request<Food>("POST", "/api/foods", { name, category_id, reference_unit }),
   categories: () => request<Category[]>("GET", "/api/food-categories"),

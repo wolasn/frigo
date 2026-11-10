@@ -185,3 +185,25 @@ def test_basiques_infinis(client, catalogue):
     login_as(client, "alice")
     names = [f["name"] for f in client.get("/api/basics").json()]
     assert "Test eau" in names
+
+
+def test_recherche_par_categorie(client, db_session):
+    from app.models import Food, FoodCategory
+    from app.models.enums import ReferenceUnit
+
+    fruits = FoodCategory(name="Test fruits recherche", aisle="Fruits et légumes")
+    legumes = FoodCategory(name="Test légumes recherche", aisle="Fruits et légumes")
+    db_session.add_all([fruits, legumes])
+    db_session.flush()
+    db_session.add_all([
+        Food(name="Testpomme rouge", category_id=fruits.id, reference_unit=ReferenceUnit.PIECE),
+        Food(name="Testpoire", category_id=fruits.id, reference_unit=ReferenceUnit.PIECE),
+        Food(name="Testpomme de terre", category_id=legumes.id, reference_unit=ReferenceUnit.GRAM),
+    ])
+    db_session.flush()
+    client.post("/api/auth/register", json={"username": "alice", "display_name": "Alice", "password": PASSWORD})
+
+    names = lambda **p: [f["name"] for f in client.get("/api/foods", params=p).json()]
+    assert set(names(q="testpomme")) == {"Testpomme rouge", "Testpomme de terre"}  # toutes les catégories
+    assert names(q="testpomme", category_id=str(fruits.id)) == ["Testpomme rouge"]
+    assert names(category_id=str(fruits.id), limit=100) == ["Testpoire", "Testpomme rouge"]  # sans texte : toute la catégorie

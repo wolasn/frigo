@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type Food, type LocationShelfLife, type ManagedLocation, type ShelfLifeRow, type StorageType } from "../../api";
 import { STORAGE_LABELS } from "../../format";
 import { ErrorMessage, inputClass, Modal, secondaryButton } from "../ui";
+import CategorySelect from "./CategorySelect";
 
 const TYPE_HINT = "Le type donne les durées de conservation par défaut (un « Frigo du garage » se comporte comme un réfrigérateur).";
 
@@ -168,6 +169,7 @@ function ShelfLifeDialog({
 }) {
   const [data, setData] = useState<LocationShelfLife | null>(null);
   const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("");
   const [results, setResults] = useState<Food[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -176,13 +178,13 @@ function ShelfLifeDialog({
   }, [location.id]);
 
   useEffect(() => {
-    if (query.trim().length < 2) {
+    if (query.trim().length < 2 && !category) {
       setResults([]);
       return;
     }
-    const timer = setTimeout(() => api.searchFoods(query.trim()).then(setResults).catch(() => setResults([])), 250);
+    const timer = setTimeout(() => api.searchFoods(query.trim(), category).then(setResults).catch(() => setResults([])), 250);
     return () => clearTimeout(timer);
-  }, [query]);
+  }, [query, category]);
 
   async function save(kind: "categories" | "foods", id: string, days: number | null) {
     setError(null);
@@ -213,7 +215,10 @@ function ShelfLifeDialog({
             <ShelfLifeTable title="Aliments particuliers" rows={data.foods} canEdit={canEdit} onSave={(id, days) => save("foods", id, days)} />
             {canEdit && (
               <div>
-                <input className={inputClass} placeholder="Régler un autre aliment : tape son nom" value={query} onChange={(e) => setQuery(e.target.value)} />
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <input className={inputClass} placeholder="Régler un autre aliment : tape son nom" value={query} onChange={(e) => setQuery(e.target.value)} />
+                  <CategorySelect value={category} onChange={setCategory} />
+                </div>
                 {results.filter((f) => !listed.has(f.id)).length > 0 && (
                   <ul className="mt-1 max-h-40 overflow-y-auto rounded-lg border border-stone-200 text-sm dark:border-stone-800">
                     {results

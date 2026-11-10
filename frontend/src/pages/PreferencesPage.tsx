@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { api, type AdminSettings, type AiUsage, type Category, type UsageCall, type UserUsage, type Food, type Preferences, type User } from "../api";
 import { ErrorMessage, Field, inputClass, primaryButton, secondaryButton, Loading } from "../components/ui";
+import CategorySelect from "../components/inventory/CategorySelect";
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return (
@@ -15,17 +16,21 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
 /** Recherche d'un aliment du catalogue (sans création). */
 function FoodSearch({ placeholder, onPick }: { placeholder: string; onPick: (food: Food) => void }) {
   const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("");
   const [results, setResults] = useState<Food[]>([]);
 
   useEffect(() => {
-    if (!query.trim()) return setResults([]);
-    const timer = setTimeout(() => api.searchFoods(query).then(setResults).catch(() => setResults([])), 200);
+    if (!query.trim() && !category) return setResults([]);
+    const timer = setTimeout(() => api.searchFoods(query, category).then(setResults).catch(() => setResults([])), 200);
     return () => clearTimeout(timer);
-  }, [query]);
+  }, [query, category]);
 
   return (
-    <div className="relative max-w-sm">
-      <input className={inputClass} placeholder={placeholder} value={query} onChange={(e) => setQuery(e.target.value)} />
+    <div className="relative max-w-xl">
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <input className={inputClass} placeholder={placeholder} value={query} onChange={(e) => setQuery(e.target.value)} />
+        <CategorySelect value={category} onChange={setCategory} />
+      </div>
       {results.length > 0 && (
         <ul className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-stone-200 bg-white shadow-lg dark:border-stone-700 dark:bg-stone-900">
           {results.map((food) => (

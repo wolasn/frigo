@@ -75,7 +75,8 @@ def search_foods(
     session: DbSession,
     user: CurrentUser,
     q: str = Query(default="", max_length=80),
-    limit: int = Query(default=20, ge=1, le=50),
+    limit: int = Query(default=20, ge=1, le=100),
+    category_id: uuid.UUID | None = None,  # vide = toutes les catégories
 ) -> list[FoodOut]:
     term = q.strip().lower()
     query = (
@@ -83,6 +84,8 @@ def search_foods(
         .join(FoodCategory, FoodCategory.id == Food.category_id)
         .where(visible_foods(user.id), Food.is_always_infinite.is_(False))
     )
+    if category_id is not None:
+        query = query.where(Food.category_id == category_id)
     if term:
         pattern = f"%{term}%"
         alias_match = exists().where(FoodAlias.food_id == Food.id, func.lower(FoodAlias.alias).like(pattern))

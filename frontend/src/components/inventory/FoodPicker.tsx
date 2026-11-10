@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type Category, type Food } from "../../api";
 import { inputClass, primaryButton, secondaryButton, ErrorMessage, Field } from "../ui";
+import CategorySelect from "./CategorySelect";
 
 const REFERENCE_UNITS: { value: Food["reference_unit"]; label: string }[] = [
   { value: "g", label: "Au poids (g, kg)" },
@@ -11,16 +12,17 @@ const REFERENCE_UNITS: { value: Food["reference_unit"]; label: string }[] = [
 /** Recherche dans le catalogue, avec création d'un aliment personnel s'il manque. */
 export default function FoodPicker({ value, onChange }: { value: Food | null; onChange: (food: Food | null) => void }) {
   const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("");
   const [results, setResults] = useState<Food[]>([]);
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     if (value) return;
     const timer = setTimeout(() => {
-      api.searchFoods(query).then(setResults).catch(() => setResults([]));
+      api.searchFoods(query, category).then(setResults).catch(() => setResults([]));
     }, 200);
     return () => clearTimeout(timer);
-  }, [query, value]);
+  }, [query, category, value]);
 
   if (value) {
     return (
@@ -42,13 +44,16 @@ export default function FoodPicker({ value, onChange }: { value: Food | null; on
 
   return (
     <div>
-      <input
-        className={inputClass}
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Rechercher : carotte, lait, riz…"
-        autoFocus
-      />
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <input
+          className={inputClass}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Rechercher : carotte, lait, riz…"
+          autoFocus
+        />
+        <CategorySelect value={category} onChange={setCategory} />
+      </div>
       <ul className="mt-2 max-h-56 overflow-y-auto rounded-lg border border-stone-200 dark:border-stone-800">
         {results.map((food) => (
           <li key={food.id}>
