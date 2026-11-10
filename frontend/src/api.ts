@@ -165,6 +165,24 @@ export type Meal = {
   shortages: { name: string; reason: "expires_before" | "insufficient" }[];
 };
 
+export type BalanceTile = {
+  key: string;
+  label: string;
+  value: string;
+  target: string;
+  status: "good" | "warn" | "info";
+  hint: string;
+  meal_ids: string[];
+};
+
+export type WeekBalance = { meal_count: number; analyzed_count: number; unanalyzed_meal_ids: string[]; days: number; tiles: BalanceTile[] };
+
+export type MealAlternative = { recipe: RecipeCard; reasons: string[]; in_stock: boolean };
+
+export type MealDraft = { meal_date: string; slot: MealSlot; recipe: RecipeCard | null; reasons: string[] };
+
+export type SuggestBody = { days: string[]; slots?: MealSlot[]; agenda: string; servings?: number; exclude?: string[]; prefer?: string[] };
+
 export type MealCreate = {
   recipe_id?: string;
   leftover_item_id?: string;
@@ -342,6 +360,11 @@ export const api = {
   discoverRecipes: () => request<{ queries: string[]; recipes: RecipeCard[] }>("POST", "/api/recipes/discover"),
 
   agenda: (start: string, end: string) => request<Meal[]>("GET", `/api/agenda?${query({ start, end })}`),
+  weekBalance: (start: string, agenda: string) => request<WeekBalance>("GET", `/api/agenda/balance?${query({ start, agenda })}`),
+  mealAlternatives: (id: string, focus?: string) => request<MealAlternative[]>("GET", `/api/agenda/${id}/alternatives?${query({ focus })}`),
+  replaceMeal: (id: string, recipe_id: string, confirm: boolean) =>
+    request<{ warnings: string[]; meal: Meal | null }>("POST", `/api/agenda/${id}/replace`, { recipe_id, confirm }),
+  suggestMeals: (body: SuggestBody) => request<MealDraft[]>("POST", "/api/agenda/suggest", body),
   pastUnmarked: () => request<Meal[]>("GET", "/api/agenda/past-unmarked"),
   planMeal: (body: MealCreate) => request<Meal>("POST", "/api/agenda", body),
   previewMove: (id: string, body: MealChange) => request<{ warnings: string[] }>("POST", `/api/agenda/${id}/preview-move`, body),

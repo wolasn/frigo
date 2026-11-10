@@ -290,3 +290,25 @@ def discovery_queries(session: Session, inventory_ids: list[uuid.UUID], max_quer
         if len(queries) >= max_queries:
             break
     return queries
+
+
+def recompute_catalogue_scores(session: Session) -> int:
+    """Recalcule le score santé des recettes notées d'après le catalogue (personnelles, IA, et
+    Marmiton sans valeurs nutritionnelles), par exemple après l'import Ciqual. Renvoie le nombre modifié."""
+    changed = 0
+    for recipe in list(session.scalars(select(Recipe))):
+        if recipe.source == RecipeSource.MARMITON and (recipe.nutrition_per_serving or {}).get("source") == "marmiton":
+            continue  # valeurs fournies par Marmiton : on les garde
+        weights = []
+        for row in session.scalars(select(RecipeIngredient).where(RecipeIngredient.recipe_id == recipe.id)):
+            food = session.get(Food, row.food_id) if row.food_id else None
+            weight = _ingredient_weight_g(food, row.quantity_ref) if food and not row.is_optional else None
+            if weight:
+                weights.append((food, float(weight)))
+        score, detail = score_from_foods(weights, recipe.servings)
+        new = Decimal(str(score)) if score is not None else None
+        if new != recipe.health_score or detail != recipe.nutrition_per_serving:
+            recipe.health_score, recipe.nutrition_per_serving = new, detail
+            changed += 1
+    session.flush()
+    return changed

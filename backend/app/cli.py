@@ -48,7 +48,7 @@ def main(argv: list[str] | None = None) -> None:
     promote = commands.add_parser("super-admin", help="nommer le super-administrateur")
     promote.add_argument("username")
     promote.add_argument("--replace", action="store_true", help="remplacer le super-administrateur actuel")
-    commands.add_parser("seed-catalogue", help="charger ou mettre à jour le catalogue de départ")
+    commands.add_parser("seed-catalogue", help="charger ou mettre à jour le catalogue de départ (avec Ciqual)")
     commands.add_parser("rematch-ingredients", help="refaire le rapprochement des ingrédients Marmiton")
     commands.add_parser("check-db", help="vérifier la base maintenant (une tentative) et alerter si besoin")
     commands.add_parser("purge", help="lancer la purge nocturne maintenant")
@@ -79,9 +79,16 @@ def main(argv: list[str] | None = None) -> None:
             from app.seed.catalogue import seed_catalogue
             from app.seed.utensils import seed_utensils
 
+            from app.seed.ciqual import import_ciqual
+            from app.services.recipes import recompute_catalogue_scores
+
             counts = seed_catalogue(session)
             counts["ustensiles"] = seed_utensils(session)
             print("Catalogue à jour : " + ", ".join(f"{n} {label}" for label, n in counts.items()))
+            ciqual = import_ciqual(session)
+            print("Ciqual 2025 : " + ", ".join(f"{n} {label}" for label, n in ciqual.items()))
+            print(f"Scores santé recalculés : {recompute_catalogue_scores(session)}")
+            session.commit()
         elif args.command == "purge":
             from app.maintenance import purge
 

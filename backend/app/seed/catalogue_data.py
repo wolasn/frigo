@@ -1,6 +1,6 @@
 """Catalogue de départ : aliments courants, catégories et durées de conservation indicatives.
 
-Les valeurs nutritionnelles seront complétées par l'import de la base Ciqual.
+Les valeurs nutritionnelles viennent de la table Ciqual 2025 (voir CIQUAL_CODES et seed/ciqual.py).
 Les durées sont des estimations prudentes, utilisées seulement quand aucune date
 n'est connue ; l'utilisateur peut toujours corriger la date d'un article.
 """
@@ -224,3 +224,37 @@ GENERIC_CONVERSIONS = [
     ("l", 1000),
     ("piece", 1),
 ]
+
+# Correspondance avec la table Ciqual 2025 (Anses, licence Etalab 2.0) : code de l'aliment Ciqual
+# le plus proche, sous la forme où on l'achète (cru, sec, en conserve égoutté…).
+CIQUAL_CODES = {
+    "Pomme": 13039, "Banane": 13005, "Orange": 13034, "Clémentine": 13024, "Citron": 13009, "Poire": 13037,
+    "Kiwi": 13021, "Pêche": 13043, "Abricot": 13000, "Mangue": 13025, "Avocat": 13004, "Ananas": 13002,
+    "Fraises": 13014, "Raisin": 13044,
+    "Tomate": 20385, "Carotte": 20009, "Pomme de terre": 4008, "Patate douce": 4101, "Oignon": 20034,
+    "Échalote": 20097, "Ail (gousse)": 11000, "Courgette": 20020, "Aubergine": 20053, "Poivron": 20041,
+    "Concombre": 20019, "Salade (laitue)": 20031, "Épinards": 20059, "Brocoli": 20057, "Chou-fleur": 20016,
+    "Champignons de Paris": 20056, "Poireau": 20039, "Haricots verts": 20061, "Petits pois": 20072,
+    "Courge butternut": 20138, "Radis": 20045,
+    "Blanc de poulet": 36017, "Cuisse de poulet": 36002, "Escalope de dinde": 36304, "Bœuf haché": 6254,
+    "Steak de bœuf": 6201, "Côte de porc": 28100, "Lardons": 28720, "Jambon blanc": 28900, "Saucisse": 30110,
+    "Saumon": 26036, "Cabillaud": 26043, "Crevettes": 10007,
+    "Lait demi-écrémé": 19033, "Crème fraîche": 19410, "Crème liquide": 19417, "Yaourt nature": 19593,
+    "Beurre": 16400, "Œuf": 22000,
+    "Emmental râpé": 12118, "Mozzarella": 19590, "Parmesan": 12120, "Comté": 12110, "Fromage de chèvre": 12812,
+    "Feta": 12066,
+    "Pâtes": 9810, "Riz": 9100, "Semoule": 9610, "Quinoa": 9340, "Farine de blé": 9440, "Flocons d'avoine": 32140,
+    "Pâte brisée": 23414, "Pâte feuilletée": 23424, "Pâte à pizza": 37001,
+    "Lentilles vertes": 20585, "Lentilles corail": 20535, "Pois chiches secs": 20516, "Haricots rouges secs": 20525,
+    "Baguette": 7001, "Pain de mie": 7200,
+    "Sel": 11058, "Poivre": 11015, "Paprika": 11049, "Cumin": 11042, "Curry": 11005, "Herbes de Provence": 11060,
+    "Cannelle": 11025, "Noix de muscade": 11048,
+    "Moutarde": 11013, "Ketchup": 11008, "Mayonnaise": 11054, "Sauce soja": 11104, "Vinaigre": 11018,
+    "Concentré de tomate": 20068, "Bouillon de légumes (cube)": 11041,
+    "Huile d'olive": 17270, "Huile de tournesol": 17440,
+    "Sucre": 31016, "Miel": 31008, "Chocolat noir": 31085, "Confiture": 30999,
+    "Tomates concassées (conserve)": 20169, "Thon (conserve)": 26039, "Maïs (conserve)": 20066,
+    "Lait de coco": 18041,
+    "Amandes": 15000, "Noix": 15005, "Raisins secs": 13046,
+    "Jus d'orange": 2070, "Eau": 18066,
+}

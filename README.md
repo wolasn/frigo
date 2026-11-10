@@ -29,11 +29,21 @@ Ajouter `--replace` pour remplacer le super-administrateur actuel.
 ## Catalogue de départ
 
 Charge ou met à jour les catégories, ~100 aliments courants, leurs durées de conservation
-indicatives et les conversions d'unités (relançable sans créer de doublons) :
+indicatives et les conversions d'unités (relançable sans créer de doublons). La même commande
+remplit les valeurs nutritionnelles depuis la table Ciqual puis recalcule le score santé des
+recettes personnelles et IA :
 
 ```
 docker compose exec app python -m app.cli seed-catalogue
 ```
+
+Valeurs nutritionnelles : Anses, *Table de composition nutritionnelle des aliments Ciqual 2025*,
+doi:10.57745/RDMHWY, licence Etalab 2.0. L'extrait utilisé (8 valeurs pour 100 g) est
+`backend/app/seed/ciqual_2025.csv` ; la correspondance avec le catalogue est `CIQUAL_CODES`
+dans `backend/app/seed/catalogue_data.py`.
+
+Le bilan « Équilibre de la semaine » de l'agenda applique des règles fixes inspirées des repères
+du PNNS (Santé publique France) : voir `backend/app/services/balance.py`.
 
 Après avoir enrichi le catalogue, refaire le rapprochement des ingrédients des recettes Marmiton déjà importées :
 

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, type Meal, type MealChange, type MealSlot } from "../../api";
+import { api, type Meal, type MealAlternative, type MealChange, type MealSlot } from "../../api";
 import { isoToday } from "../../format";
 import { ErrorMessage, Field, inputClass, Modal, primaryButton, secondaryButton } from "../ui";
 import { SLOT_LABELS, SLOTS } from "./PlanDialog";
@@ -8,7 +8,7 @@ export function formatDay(iso: string): string {
   return new Date(`${iso}T12:00:00`).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
 }
 
-/** Confirmation d'un déplacement qui aurait des conséquences. */
+/** Confirmation d'un déplacement ou d'un remplacement qui aurait des conséquences. */
 export function MoveWarningDialog({
   warnings,
   onConfirm,
@@ -19,7 +19,7 @@ export function MoveWarningDialog({
   onCancel: () => void;
 }) {
   return (
-    <Modal title="Attention, ce déplacement a des conséquences" onClose={onCancel}>
+    <Modal title="Attention, ce changement a des conséquences" onClose={onCancel}>
       <ul className="mb-4 list-disc space-y-1 pl-5 text-sm text-amber-800 dark:text-amber-300">
         {warnings.map((w) => (
           <li key={w}>{w}</li>
@@ -28,7 +28,7 @@ export function MoveWarningDialog({
       <p className="mb-4 text-sm text-stone-600 dark:text-stone-400">Les manques iront dans la liste de courses.</p>
       <div className="flex gap-2">
         <button className={primaryButton} onClick={onConfirm}>
-          Déplacer quand même
+          Continuer quand même
         </button>
         <button className={secondaryButton} onClick={onCancel}>
           Annuler
@@ -56,8 +56,10 @@ export default function MealDialog({
   onChanged,
   onClose,
   askConfirmation,
+  focus,
 }: {
   meal: Meal;
+  focus?: { key: string; label: string } | null;
   onOpenRecipe: (recipeId: string, servings: number) => void;
   onChanged: () => void;
   onClose: () => void;
@@ -68,6 +70,8 @@ export default function MealDialog({
   const [servings, setServings] = useState(meal.servings);
   const [askLeftovers, setAskLeftovers] = useState(false);
   const [portions, setPortions] = useState("");
+  const [alternatives, setAlternatives] = useState<MealAlternative[] | null>(null);
+  const [loadingAlternatives, setLoadingAlternatives] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const planned = meal.status === "planned";
   const changed = date !== meal.meal_date || slot !== meal.slot || servings !== meal.servings;
@@ -93,6 +97,31 @@ export default function MealDialog({
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Modification impossible.");
+    }
+  }
+
+  async function showAlternatives() {
+    setError(null);
+    setLoadingAlternatives(true);
+    try {
+      setAlternatives(await api.mealAlternatives(meal.id, focus?.key));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Impossible de chercher des alternatives.");
+    } finally {
+      setLoadingAlternatives(false);
+    }
+  }
+
+  async function replace(recipeId: string) {
+    setError(null);
+    try {
+      const { warnings } = await api.replaceMeal(meal.id, recipeId, false);
+      if (warnings.length && !(await askConfirmation(warnings))) return;
+      await api.replaceMeal(meal.id, recipeId, true);
+      onChanged();
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Remplacement impossible.");
     }
   }
 
@@ -181,8 +210,68 @@ export default function MealDialog({
             )}
           </div>
         )}
+
+        {planned && meal.can_edit && meal.kind === "recipe" && (
+          <AlternativesSection
+            focusLabel={focus?.label}
+            alternatives={alternatives}
+            loading={loadingAlternatives}
+            onSearch={showAlternatives}
+            onReplace={replace}
+            onOpenRecipe={(id) => onOpenRecipe(id, meal.servings)}
+          />
+        )}
         <ErrorMessage message={error} />
       </div>
     </Modal>
+  );
+}
+
+function AlternativesSection({
+  focusLabel,
+  alternatives,
+  loading,
+  onSearch,
+  onReplace,
+  onOpenRecipe,
+}: {
+  focusLabel?: string;
+  alternatives: MealAlternative[] | null;
+  loading: boolean;
+  onSearch: () => void;
+  onReplace: (recipeId: string) => void;
+  onOpenRecipe: (recipeId: string) => void;
+}) {
+  if (alternatives === null) {
+    return (
+      <button className="text-sm font-medium text-brand-700 hover:underline disabled:opacity-60 dark:text-brand-500" onClick={onSearch} disabled={loading}>
+        {loading ? "Recherche…" : `Alternatives mieux équilibrées${focusLabel ? ` (${focusLabel.toLowerCase()})` : ""}`}
+      </button>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-stone-200 p-3 dark:border-stone-800">
+      <p className="mb-2 text-sm font-medium">Alternatives mieux équilibrées{focusLabel ? ` · ${focusLabel}` : ""}</p>
+      {alternatives.length === 0 ? (
+        <p className="text-sm text-stone-500">
+          Aucune recette connue ne fait mieux pour ce repas. Importe ou invente d'autres recettes depuis l'onglet Repas.
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {alternatives.map(({ recipe, reasons, in_stock }) => (
+            <li key={recipe.id} className="flex items-start justify-between gap-2 text-sm">
+              <button className="text-left" onClick={() => onOpenRecipe(recipe.id)}>
+                <span className="font-medium hover:underline">{recipe.title}</span>
+                {recipe.source === "ai" && <span className="ml-1 rounded bg-violet-100 px-1 text-[10px] font-semibold text-violet-800 dark:bg-violet-950 dark:text-violet-300">IA</span>}
+                <span className={"block text-xs " + (in_stock ? "text-emerald-700 dark:text-emerald-400" : "text-stone-500")}>{reasons.join(" · ")}</span>
+              </button>
+              <button className={secondaryButton + " shrink-0 px-2.5 py-1 text-xs"} onClick={() => onReplace(recipe.id)}>
+                Remplacer
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

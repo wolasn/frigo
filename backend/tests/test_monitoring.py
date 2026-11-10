@@ -97,6 +97,8 @@ def test_base_injoignable_donne_503():
     def broken():
         raise OperationalError("select 1", {}, Exception("connexion refusée"))
 
+    # La route doit passer avant le montage des fichiers statiques sur « / ».
+    app.router.routes.insert(0, app.router.routes.pop())
     try:
         response = TestClient(app).get("/api/test-panne")
         assert response.status_code == 503

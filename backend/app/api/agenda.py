@@ -10,6 +10,9 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import CurrentUser, DbSession
+from app.api.recipes import RecipeCard
+from app.api.recipes import _card as recipe_card
+from app.api.recipes import _options as recipe_options
 from app.clock import today
 from app.models import (
     Inventory,
@@ -32,8 +35,25 @@ from app.models.enums import (
     RemovalReason,
     StorageType,
 )
+from app.services.balance import (
+    MealFacts,
+    WeekState,
+    compare,
+    draft_value,
+    is_dessert,
+    recipe_facts,
+    weekly_balance,
+)
+from app.services.proposals import propose
 from app.services.inventory import estimate_expiry
-from app.services.planning import EXPIRES_BEFORE, EngineResult, Shortage, compute, recompute_reservations
+from app.services.planning import (
+    EXPIRES_BEFORE,
+    SLOT_ORDER,
+    EngineResult,
+    Shortage,
+    compute,
+    recompute_reservations,
+)
 from app.services.recipes import visible_recipes_clause
 
 router = APIRouter(prefix="/api/agenda", tags=["agenda"])
@@ -241,8 +261,10 @@ def plan_meal(body: MealCreate, session: DbSession, user: CurrentUser) -> MealOu
 
 def _move_warnings(session: Session, meal: PlannedMeal, new_date: date, new_slot: MealSlot) -> list[str]:
     """Seulement les conséquences nouvelles : un manque qui existait déjà avant n'est pas répété."""
-    before = compute(session)
-    after = compute(session, {meal.id: (new_date, new_slot)})
+    return _new_warnings(session, meal, new_date, compute(session), compute(session, {meal.id: (new_date, new_slot)}))
+
+
+def _new_warnings(session: Session, meal: PlannedMeal, new_date: date, before: EngineResult, after: EngineResult) -> list[str]:
     already = {(s.name, s.reason) for s in before.shortages.get(meal.id, [])}
     warnings = [
         _shortage_text(s, new_date) for s in after.shortages.get(meal.id, []) if (s.name, s.reason) not in already
@@ -386,3 +408,213 @@ def past_unmarked(session: DbSession, user: CurrentUser) -> list[MealOut]:
         )
     )
     return _meals_out(session, user, meals, EngineResult())
+
+
+class BalanceTile(BaseModel):
+    key: str
+    label: str
+    value: str
+    target: str
+    status: str
+    hint: str
+    meal_ids: list[uuid.UUID]
+
+
+class BalanceOut(BaseModel):
+    meal_count: int
+    analyzed_count: int
+    unanalyzed_meal_ids: list[uuid.UUID]
+    days: int
+    tiles: list[BalanceTile]
+
+
+@router.get("/balance")
+def week_balance(
+    session: DbSession,
+    user: CurrentUser,
+    start: date = Query(),
+    agenda: str = Query("all", description="all, personal ou l'identifiant d'un inventaire partagé"),
+) -> BalanceOut:
+    """Bilan nutritionnel (règles fixes) des repas prévus et cuisinés de la semaine qui commence à `start`."""
+    query = select(PlannedMeal).where(
+        _visible_meals_clause(session, user),
+        PlannedMeal.meal_date >= start,
+        PlannedMeal.meal_date <= start + timedelta(days=6),
+        PlannedMeal.status != MealStatus.CANCELLED,
+    )
+    if agenda == "personal":
+        query = query.where(PlannedMeal.shared_inventory_id.is_(None))
+    elif agenda != "all":
+        try:
+            query = query.where(PlannedMeal.shared_inventory_id == uuid.UUID(agenda))
+        except ValueError:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Agenda inconnu.") from None
+    return BalanceOut(**weekly_balance(session, list(session.scalars(query))))
+
+
+# ---------- Alternatives mieux équilibrées ----------
+
+
+class AlternativeOut(BaseModel):
+    recipe: RecipeCard
+    reasons: list[str]
+    in_stock: bool
+
+
+class ReplaceIn(BaseModel):
+    recipe_id: uuid.UUID
+    confirm: bool = False  # False : simulation, renvoie seulement les avertissements
+
+
+@router.get("/{meal_id}/alternatives")
+def meal_alternatives(
+    meal_id: uuid.UUID,
+    session: DbSession,
+    user: CurrentUser,
+    focus: str | None = Query(None, description="objectif d'une tuile du bilan : red_meat, fish, legume…"),
+) -> list[AlternativeOut]:
+    """Recettes visibles mieux équilibrées que celle du repas, faisables avec les ustensiles, sans allergène,
+    hors plats déjà prévus cette semaine. Les plus faciles à cuisiner avec le stock d'abord."""
+    meal = _get_meal(session, user, meal_id, edit=False)
+    current = session.get(Recipe, meal.recipe_id) if meal.recipe_id else None
+    if current is None:
+        return []
+    monday = meal.meal_date - timedelta(days=meal.meal_date.weekday())
+    week_recipes = set(session.scalars(select(PlannedMeal.recipe_id).where(
+        _visible_meals_clause(session, user), PlannedMeal.meal_date >= monday,
+        PlannedMeal.meal_date <= monday + timedelta(days=6), PlannedMeal.status != MealStatus.CANCELLED,
+        PlannedMeal.recipe_id.is_not(None))))
+    inventory_ids = [meal.shared_inventory_id] if meal.shared_inventory_id else None
+    options = recipe_options(session, user, meal.servings, meal.meal_date, inventory_ids, None, None, False, None)
+    current_facts = recipe_facts(session, current)
+
+    found = []
+    for evaluation in propose(session, user, options, limit=500):
+        if evaluation.recipe.id in week_recipes or (is_dessert(evaluation.recipe) and not is_dessert(current)):
+            continue
+        meets, gain, reasons = compare(current_facts, recipe_facts(session, evaluation.recipe), focus)
+        if meets:
+            found.append((evaluation.missing_count, -gain, evaluation, reasons))
+    found.sort(key=lambda f: (f[0] > 0, f[0], f[1]))
+    return [
+        AlternativeOut(recipe=RecipeCard(**recipe_card(e, meal.servings)), in_stock=e.missing_count == 0,
+                       reasons=reasons + ([f"{e.missing_count} achat(s)"] if e.missing_count else ["Tout est en stock"]))
+        for _, _, e, reasons in found[:6]
+    ]
+
+
+@router.post("/{meal_id}/replace")
+def replace_recipe(meal_id: uuid.UUID, body: ReplaceIn, session: DbSession, user: CurrentUser) -> MoveResult:
+    """Change la recette d'un repas prévu (même date, même créneau, même nombre de personnes)."""
+    meal = _get_meal(session, user, meal_id, edit=True)
+    if meal.status != MealStatus.PLANNED or meal.recipe_id is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="Seul un repas prévu à partir d'une recette peut être remplacé.")
+    if meal.meal_date < today():
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Ce repas est déjà passé.")
+    recipe = session.scalar(select(Recipe).where(Recipe.id == body.recipe_id, visible_recipes_clause(user)))
+    if recipe is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Recette introuvable.")
+
+    before = compute(session)
+    savepoint = session.begin_nested()
+    meal.recipe_id = recipe.id
+    session.flush()
+    warnings = _new_warnings(session, meal, meal.meal_date, before, compute(session))
+    if not body.confirm:
+        savepoint.rollback()
+        return MoveResult(warnings=warnings)
+    savepoint.commit()
+    result = recompute_reservations(session)
+    session.commit()
+    return MoveResult(warnings=warnings, meal=_meals_out(session, user, [meal], result)[0])
+
+
+# ---------- Proposer des repas (brouillons, rien n'est enregistré) ----------
+
+SUGGESTED_SLOTS = [MealSlot.LUNCH, MealSlot.DINNER]
+
+
+class SuggestIn(BaseModel):
+    days: list[date] = Field(min_length=1, max_length=7)
+    slots: list[MealSlot] = Field(default_factory=lambda: list(SUGGESTED_SLOTS), min_length=1, max_length=4)
+    agenda: str = "personal"  # personal ou l'identifiant d'un inventaire partagé
+    servings: int | None = Field(default=None, ge=1, le=999)
+    exclude: list[uuid.UUID] = Field(default_factory=list, max_length=100)  # recettes à ne pas reproposer
+    prefer: list[uuid.UUID] = Field(default_factory=list, max_length=10)  # recettes à placer d'abord (ex. : inventées par l'IA)
+
+
+class DraftOut(BaseModel):
+    meal_date: date
+    slot: MealSlot
+    recipe: RecipeCard | None  # vide : aucune recette connue ne convient
+    reasons: list[str]
+
+
+@router.post("/suggest")
+def suggest_meals(body: SuggestIn, session: DbSession, user: CurrentUser) -> list[DraftOut]:
+    """Propose une recette pour chaque créneau vide demandé, en équilibrant la semaine (règles fixes).
+    Les repas existants ne sont jamais touchés ; l'utilisateur valide ensuite chaque brouillon."""
+    shared_id = None
+    if body.agenda != "personal":
+        try:
+            shared_id = uuid.UUID(body.agenda)
+        except ValueError:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Agenda inconnu.") from None
+        member = _member(session, user, shared_id)
+        if member is None or member.role == MemberRole.MEMBER:
+            raise HTTPException(status.HTTP_403_FORBIDDEN,
+                                detail="Seuls les contributeurs et administrateurs planifient dans cet agenda.")
+    days = sorted({d for d in body.days if d >= today()})
+    if not days:
+        return []
+
+    monday = days[0] - timedelta(days=days[0].weekday())
+    agenda_clause = (PlannedMeal.shared_inventory_id == shared_id) if shared_id else (
+        PlannedMeal.shared_inventory_id.is_(None) & (PlannedMeal.user_id == user.id))
+    week_meals = list(session.scalars(select(PlannedMeal).where(
+        agenda_clause, PlannedMeal.status != MealStatus.CANCELLED,
+        PlannedMeal.meal_date >= min(monday, days[0]), PlannedMeal.meal_date <= max(monday + timedelta(days=6), days[-1]))))
+    occupied = {(m.meal_date, m.slot) for m in week_meals}
+
+    facts_cache: dict[uuid.UUID, MealFacts] = {}
+
+    def facts_of(recipe: Recipe) -> MealFacts:
+        if recipe.id not in facts_cache:
+            facts_cache[recipe.id] = recipe_facts(session, recipe)
+        return facts_cache[recipe.id]
+
+    state = WeekState(used=set(body.exclude))
+    prefer = set(body.prefer)
+    for meal in week_meals:
+        if meal.recipe_id:
+            recipe = session.get(Recipe, meal.recipe_id)
+            state.add(recipe.id, facts_of(recipe) if recipe else None)
+
+    inventory_ids = [shared_id] if shared_id else None
+    slot_order = sorted(set(body.slots), key=lambda s: SLOT_ORDER[s])
+    wanted = [(d, s) for d in days for s in slot_order if (d, s) not in occupied]
+    drafts: list[DraftOut] = []
+    if not wanted:
+        return drafts
+    # Une seule évaluation du stock, à la date du premier créneau : assez juste pour des brouillons,
+    # et les manques réels s'affichent dès qu'un brouillon est validé.
+    options = recipe_options(session, user, body.servings, wanted[0][0], inventory_ids, None, None, False, None)
+    servings, evaluations = options.servings, propose(session, user, options, limit=500)
+    for day, slot in wanted:
+        best = None
+        for evaluation in evaluations:
+            if evaluation.recipe.id in state.used or is_dessert(evaluation.recipe):
+                continue
+            value, reasons = draft_value(evaluation, facts_of(evaluation.recipe), state)
+            if evaluation.recipe.id in prefer:
+                value += 100
+            if best is None or value > best[0]:
+                best = (value, evaluation, reasons)
+        if best is None:
+            drafts.append(DraftOut(meal_date=day, slot=slot, recipe=None, reasons=["Aucune autre recette connue ne convient."]))
+            continue
+        _, evaluation, reasons = best
+        state.add(evaluation.recipe.id, facts_of(evaluation.recipe))
+        drafts.append(DraftOut(meal_date=day, slot=slot, recipe=RecipeCard(**recipe_card(evaluation, servings)),
+                               reasons=reasons))
+    return drafts
