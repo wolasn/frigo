@@ -1,0 +1,19 @@
+# Serveur : docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# L'appli n'écoute que sur la machine elle-même ; nginx la publie en https.
+services:
+  app:
+    build:
+      args:
+        INSTALL_DEV: "false"
+    ports: !override
+      - "127.0.0.1:8000:8000"
+    environment:
+      COOKIE_SECURE: "true"  # cookie de session envoyé en https seulement
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  backup:
+    logging:
+      driver: json-file
+      options: { max-size: "1m", max-file: "2" }

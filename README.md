@@ -16,6 +16,22 @@ Un seul conteneur : FastAPI sert l'API sous `/api` et l'interface React compilé
 3. Ouvrir http://localhost:8000 — la page indique l'état de l'API et de la base.
    Documentation de l'API : http://localhost:8000/api/docs
 
+## Serveur
+
+En ligne sur https://frigo.nalgar-foundry.duckdns.org (Ubuntu 24.04, dossier `/opt/frigo`).
+Une seule copie de l'appli doit tourner sur la base : les tâches planifiées et les sauvegardes
+tourneraient sinon en double (`docker compose stop` sur le PC).
+
+- L'appli écoute sur `127.0.0.1:8000` seulement ; nginx (`/etc/nginx/sites-available/frigo`) la publie
+  en https, certificat Let's Encrypt renouvelé par certbot.
+- Secrets dans `/opt/frigo/secrets` (dossier lisible par root seulement).
+- Mise à jour depuis le PC (code commité seulement) :
+
+```
+git archive --format=tar HEAD | ssh <utilisateur>@<ip-du-serveur> "cd /opt/frigo && tar -xf -"
+ssh <utilisateur>@<ip-du-serveur> "cd /opt/frigo && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build && docker image prune -f"
+```
+
 ## Super-administrateur
 
 Créer d'abord son compte depuis l'application, puis :
