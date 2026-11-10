@@ -8,8 +8,7 @@ function recommendation(line: ShoppingLine): { text: string; style: string } | n
   const when = line.recommended_purchase_on <= isoToday() ? "aujourd'hui" : `le ${formatDate(line.recommended_purchase_on)}`;
   if (line.expiry_risk && line.freeze_from) {
     const from = line.freeze_from <= isoToday() ? "dès aujourd'hui" : `au plus tôt le ${formatDate(line.freeze_from)}`;
-    const before = line.recommended_purchase_on <= isoToday() ? "aujourd'hui" : `avant le ${formatDate(line.recommended_purchase_on)}`;
-    return { text: `À acheter ${before}, ou ${from} et congeler`, style: "text-amber-700 dark:text-amber-400" };
+    return { text: `À acheter ${when}, ou ${from} et congeler`, style: "text-amber-700 dark:text-amber-400" };
   }
   return line.expiry_risk
     ? { text: `À acheter ${when} (pas avant : périmerait avant le repas)`, style: "text-amber-700 dark:text-amber-400" }
