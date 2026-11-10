@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, insert, select
 from sqlalchemy.orm import Session
 
 from app.clock import today
@@ -32,8 +32,8 @@ from app.models import (
 )
 from app.models.enums import ItemKind, MealStatus, ReferenceUnit, ShoppingOrigin, StorageType
 from app.services.ingredients import parse_ingredient
-from app.services.inventory import closed_shelf_life
-from app.services.planning import compute
+from app.services.inventory import ShelfLifeIndex
+from app.services.planning import EngineResult, compute
 
 PERISHABLE_DAYS = 3
 # Lieu où l'on range un produit, par ordre de préférence quand plusieurs durées sont connues.
@@ -63,29 +63,30 @@ def target_inventory_id(session: Session, user: User, shared_inventory_id: uuid.
     return session.scalar(select(Inventory.id).where(Inventory.personal_owner_id == user.id))
 
 
-def _locations(session: Session, inventory_id: uuid.UUID) -> list[StorageLocation]:
-    return list(session.scalars(
-        select(StorageLocation).where(StorageLocation.inventory_id == inventory_id)
-        .order_by(StorageLocation.position, StorageLocation.name)
-    ))
+def usual_storage(index: ShelfLifeIndex, food: Food) -> StorageType:
+    """Type de lieu où l'on range le produit (hors congélateur), comme `shelf_life`."""
+    for storage in STORAGE_PREFERENCE:
+        if index.catalogue_days(food, storage) is not None:
+            return storage
+    return StorageType.PANTRY
 
 
-def default_location(session: Session, inventory_id: uuid.UUID, food: Food) -> StorageLocation | None:
+def default_location(index: ShelfLifeIndex, food: Food) -> StorageLocation | None:
     """Lieu habituel du produit dans cet inventaire : le premier lieu du type où on le range (hors congélateur)."""
-    storage, _ = shelf_life(session, food)
-    locations = _locations(session, inventory_id)
+    storage = usual_storage(index, food)
+    locations = index.locations
     return next((l for l in locations if l.storage_type == storage), locations[0] if locations else None)
 
 
-def freezer_location(session: Session, inventory_id: uuid.UUID) -> StorageLocation | None:
-    return next((l for l in _locations(session, inventory_id) if l.storage_type == StorageType.FREEZER), None)
+def freezer_location(index: ShelfLifeIndex) -> StorageLocation | None:
+    return next((l for l in index.locations if l.storage_type == StorageType.FREEZER), None)
 
 
-def freeze_from(session: Session, inventory_id: uuid.UUID, food: Food, first_meal: date, latest: date | None) -> date | None:
+def freeze_from(index: ShelfLifeIndex, food: Food, first_meal: date, latest: date | None) -> date | None:
     """Achat le plus tôt possible en congelant : le repas moins la durée au congélateur, jamais avant
     aujourd'hui. Vide sans congélateur, sans durée connue, ou si ça n'avance pas la date conseillée."""
-    freezer = freezer_location(session, inventory_id)
-    days = closed_shelf_life(session, food, freezer) if freezer else None
+    freezer = freezer_location(index)
+    days = index.closed_days(food, freezer) if freezer else None
     if not days:
         return None
     earliest = max(today(), first_meal - timedelta(days=days))
@@ -141,21 +142,46 @@ def _scope_meals(session: Session, user: User, shared_inventory_id: uuid.UUID | 
     return list(session.scalars(query))
 
 
-def _needs(session: Session, user: User, meals: list[PlannedMeal], shared_inventory_id: uuid.UUID | None) -> list[_Need]:
-    result = compute(session)
+def _needs(
+    session: Session, user: User, meals: list[PlannedMeal], shared_inventory_id: uuid.UUID | None,
+    result: EngineResult | None = None,
+) -> list[_Need]:
+    result = result or compute(session)
     needs: list[_Need] = []
     foods: dict[uuid.UUID, Food] = {}
     lives: dict[uuid.UUID, int | None] = {}
-    inventory_id = target_inventory_id(session, user, shared_inventory_id)
+    index = ShelfLifeIndex(session, target_inventory_id(session, user, shared_inventory_id))
 
     def food_info(food_id):
-        if food_id not in foods:
-            foods[food_id] = session.get(Food, food_id)
-            location = default_location(session, inventory_id, foods[food_id])
+        if food_id not in lives:
+            if food_id not in foods:
+                foods[food_id] = session.get(Food, food_id)
+            location = default_location(index, foods[food_id])
             # Durée dans le lieu habituel de cet inventaire, réglages du lieu compris.
-            lives[food_id] = (closed_shelf_life(session, foods[food_id], location) if location
-                              else shelf_life(session, foods[food_id])[1])
+            lives[food_id] = (index.closed_days(foods[food_id], location) if location
+                              else index.catalogue_days(foods[food_id], usual_storage(index, foods[food_id])))
         return foods[food_id], lives[food_id]
+
+    allowed = (
+        {shared_inventory_id} if shared_inventory_id
+        else set(session.scalars(select(InventoryMember.inventory_id).where(
+            InventoryMember.user_id == user.id, InventoryMember.include_in_suggestions.is_(True))))
+    )
+    recipe_ids = {m.recipe_id for m in meals if m.recipe_id}
+    ingredients_by_recipe: dict[uuid.UUID, list[RecipeIngredient]] = defaultdict(list)
+    for ingredient in session.scalars(select(RecipeIngredient).where(
+        RecipeIngredient.recipe_id.in_(recipe_ids), RecipeIngredient.is_optional.is_(False),
+    ).order_by(RecipeIngredient.position)) if recipe_ids else []:
+        ingredients_by_recipe[ingredient.recipe_id].append(ingredient)
+    wanted_foods = {s.food_id for m in meals for s in result.shortages.get(m.id, []) if s.food_id} | {
+        i.food_id for rows in ingredients_by_recipe.values() for i in rows if i.food_id}
+    if wanted_foods:  # tous les aliments en une requête
+        for f in session.scalars(select(Food).where(Food.id.in_(wanted_foods))):
+            foods.setdefault(f.id, f)
+    stocked = set(session.scalars(select(InventoryItem.food_id).where(
+        InventoryItem.inventory_id.in_(allowed), InventoryItem.archived_at.is_(None),
+        InventoryItem.kind == ItemKind.INGREDIENT, InventoryItem.food_id.is_not(None),
+    ))) if allowed else set()
 
     for meal in meals:
         # 1. Manques calculés par le moteur (aliments reconnus avec une quantité).
@@ -169,27 +195,14 @@ def _needs(session: Session, user: User, meals: list[PlannedMeal], shared_invent
         # 2. Ingrédients que le moteur ne sait pas compter : non reconnus, ou sans quantité convertible.
         if meal.recipe_id is None:
             continue
-        allowed = (
-            {shared_inventory_id} if shared_inventory_id
-            else set(session.scalars(select(InventoryMember.inventory_id).where(
-                InventoryMember.user_id == user.id, InventoryMember.include_in_suggestions.is_(True))))
-        )
-        for ingredient in session.scalars(
-            select(RecipeIngredient).where(RecipeIngredient.recipe_id == meal.recipe_id, RecipeIngredient.is_optional.is_(False))
-        ):
+        for ingredient in ingredients_by_recipe.get(meal.recipe_id, []):
             if ingredient.quantity is None:
                 continue  # assaisonnement « à vérifier » : jamais ajouté d'office
             if ingredient.food_id is None:
                 label = parse_ingredient(ingredient.raw_text).name.capitalize()
                 needs.append(_Need(None, f"{label} ({ingredient.raw_text})", None, meal, None, False, False))
             elif ingredient.quantity_ref is None:
-                in_stock = session.scalar(
-                    select(InventoryItem.id).where(
-                        InventoryItem.food_id == ingredient.food_id, InventoryItem.inventory_id.in_(allowed),
-                        InventoryItem.archived_at.is_(None), InventoryItem.kind == ItemKind.INGREDIENT,
-                    ).limit(1)
-                )
-                if in_stock is None:
+                if ingredient.food_id not in stocked:
                     food, life = food_info(ingredient.food_id)
                     recommended, perishable, risk = _recommendation(meal.meal_date, life)
                     needs.append(_Need(food, food.name, None, meal, recommended, perishable, risk))
@@ -216,8 +229,11 @@ def _group(needs: list[_Need]) -> list[_Line]:
     return list(lines.values())
 
 
-def regenerate(session: Session, user: User, shared_inventory_id: uuid.UUID | None) -> None:
-    """Remplace les lignes générées de la liste par celles calculées maintenant."""
+def regenerate(
+    session: Session, user: User, shared_inventory_id: uuid.UUID | None, result: EngineResult | None = None,
+) -> None:
+    """Remplace les lignes générées de la liste par celles calculées maintenant.
+    `result` : calcul du moteur déjà fait (une seule fois pour toutes les listes d'une page)."""
     scope = (
         (ShoppingListItem.shared_inventory_id == shared_inventory_id)
         if shared_inventory_id
@@ -227,17 +243,20 @@ def regenerate(session: Session, user: User, shared_inventory_id: uuid.UUID | No
         delete(ShoppingListItem).where(scope, ShoppingListItem.origin == ShoppingOrigin.GENERATED)
     )
     meals = _scope_meals(session, user, shared_inventory_id)
-    for line in _group(_needs(session, user, meals, shared_inventory_id)):
+    rows, links = [], []
+    for line in _group(_needs(session, user, meals, shared_inventory_id, result)):
         quantity, unit = display_quantity(line.food, line.quantity)
-        row = ShoppingListItem(
-            user_id=user.id, shared_inventory_id=shared_inventory_id, origin=ShoppingOrigin.GENERATED,
+        row_id = uuid.uuid4()  # identifiant connu tout de suite : deux requêtes pour toute la liste
+        rows.append(dict(
+            id=row_id, user_id=user.id, shared_inventory_id=shared_inventory_id, origin=ShoppingOrigin.GENERATED,
             food_id=line.food.id if line.food else None, label=line.label[:200], quantity=quantity, unit=unit,
             recommended_purchase_on=line.recommended, is_perishable=line.perishable, expiry_risk=line.expiry_risk,
-        )
-        session.add(row)
-        session.flush()
-        for meal_id, meal_quantity in line.meals.items():
-            session.add(ShoppingListItemMeal(shopping_list_item_id=row.id, planned_meal_id=meal_id, quantity=meal_quantity))
+        ))
+        links += [dict(shopping_list_item_id=row_id, planned_meal_id=meal_id, quantity=meal_quantity)
+                  for meal_id, meal_quantity in line.meals.items()]
+    if rows:
+        session.execute(insert(ShoppingListItem.__table__), rows)
+        session.execute(insert(ShoppingListItemMeal.__table__), links)
     session.flush()
 
 

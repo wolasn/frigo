@@ -24,6 +24,7 @@ from app.models import (
 from app.models.enums import DateType, InventoryKind, ItemKind, ItemUnit, ShoppingOrigin
 from app.services.inventory import estimate_expiry
 from app.services.planning import recompute_reservations
+from app.services.inventory import ShelfLifeIndex
 from app.services.shopping import default_location, freeze_from, meal_titles, regenerate, target_inventory_id
 from app.services.units import UnitError, normalize_unit, to_reference
 
@@ -104,19 +105,18 @@ def _lines(session: Session, user: User, shared_inventory_id: uuid.UUID | None) 
         else ((ShoppingListItem.user_id == user.id) & ShoppingListItem.shared_inventory_id.is_(None))
     )
     rows = session.execute(
-        select(ShoppingListItem, FoodCategory.aisle)
+        select(ShoppingListItem, FoodCategory.aisle, Food)
         .outerjoin(Food, Food.id == ShoppingListItem.food_id)
         .outerjoin(FoodCategory, FoodCategory.id == Food.category_id)
         .where(scope, ShoppingListItem.purchased_at.is_(None))
     ).all()
-    titles = meal_titles(session, [item.id for item, _ in rows])
-    inventory_id = target_inventory_id(session, user, shared_inventory_id)
+    titles = meal_titles(session, [item.id for item, _, _ in rows])
+    index = ShelfLifeIndex(session, target_inventory_id(session, user, shared_inventory_id))
     lines = []
-    for item, aisle in rows:
+    for item, aisle, food in rows:  # l'aliment vient de la même requête : pas une lecture par ligne
         meals = titles.get(item.id, [])
-        food = session.get(Food, item.food_id) if item.food_id else None
-        location = default_location(session, inventory_id, food) if food else None
-        freeze = (freeze_from(session, inventory_id, food, min(d for _, d in meals), item.recommended_purchase_on)
+        location = default_location(index, food) if food else None
+        freeze = (freeze_from(index, food, min(d for _, d in meals), item.recommended_purchase_on)
                   if food and item.expiry_risk and meals else None)
         lines.append(LineOut(
             id=item.id, origin=item.origin, food_id=item.food_id, label=item.label,
@@ -133,11 +133,11 @@ def _lines(session: Session, user: User, shared_inventory_id: uuid.UUID | None) 
 @router.get("")
 def list_shopping(session: DbSession, user: CurrentUser) -> list[ShoppingListOut]:
     """Recalcule les lignes générées puis renvoie la liste personnelle et les listes partagées."""
-    recompute_reservations(session)
-    regenerate(session, user, None)
+    result = recompute_reservations(session)  # un seul calcul du moteur pour toutes les listes
+    regenerate(session, user, None, result)
     shared = _shared_inventories(session, user)
     for inventory in shared:
-        regenerate(session, user, inventory.id)
+        regenerate(session, user, inventory.id, result)
     session.commit()
 
     result = [ShoppingListOut(id="personal", name="Ma liste", inventory_id=_personal_inventory(session, user).id,
@@ -225,4 +225,4 @@ def _location(session: Session, inventory_id: uuid.UUID, food: Food, wanted: uui
         if location is None or location.inventory_id != inventory_id:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Ce lieu n'appartient pas à l'inventaire.")
         return location
-    return default_location(session, inventory_id, food)
+    return default_location(ShelfLifeIndex(session, inventory_id), food)

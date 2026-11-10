@@ -41,7 +41,9 @@ export default function RecipeCardView({ card, onOpen }: { card: RecipeCard; onO
       className="flex flex-col overflow-hidden rounded-xl border border-stone-200 bg-white text-left transition hover:shadow-md dark:border-stone-800 dark:bg-stone-900"
     >
       <div className="relative aspect-[16/9] w-full bg-stone-200 dark:bg-stone-800">
-        {card.image_url && <img src={card.image_url} alt="" loading="lazy" className="absolute inset-0 h-full w-full object-cover" />}
+        {card.image_url && (
+          <img src={card.image_url} alt="" loading="lazy" className="absolute inset-0 h-full w-full object-cover" onError={(e) => (e.currentTarget.style.display = "none")} />
+        )}
         <div className="absolute left-2 top-2 flex gap-1">
           {card.is_pinned && <span className="rounded-full bg-white/90 px-2 py-0.5 text-xs font-medium text-stone-900">📌 Épinglé</span>}
           {card.is_favorite && <span className="rounded-full bg-white/90 px-2 py-0.5 text-xs text-amber-600">★</span>}

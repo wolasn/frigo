@@ -111,7 +111,8 @@ export default function WeekBalancePanel({
             </p>
           )}
           <p className="mt-2 text-xs text-stone-500">
-            Par personne, d'après les repas prévus et cuisinés et les repères du PNNS (Santé publique France).
+            Par personne, d'après les repas prévus et cuisinés et les repères du PNNS (Santé publique France). Conseils généraux et
+            indicatifs, sans valeur médicale.
             {balance.unanalyzed_meal_ids.length > 0 &&
               ` ${balance.unanalyzed_meal_ids.length} repas non analysé(s) : ingrédients non reconnus.`}
           </p>

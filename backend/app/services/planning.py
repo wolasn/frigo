@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, insert, select
 from sqlalchemy.orm import Session
 
 from app.clock import today
@@ -216,8 +216,11 @@ def recompute_reservations(session: Session) -> EngineResult:
     """Recalcule et enregistre toutes les réservations. Appelé après chaque changement."""
     result = compute(session)
     session.execute(delete(Reservation))
-    for meal_id, item_id, quantity in result.reservations:
-        session.add(Reservation(planned_meal_id=meal_id, inventory_item_id=item_id, quantity=quantity))
+    if result.reservations:  # une seule requête pour toutes les lignes (base distante)
+        session.execute(insert(Reservation.__table__), [
+            {"planned_meal_id": meal_id, "inventory_item_id": item_id, "quantity": quantity}
+            for meal_id, item_id, quantity in result.reservations
+        ])
     session.flush()
     return result
 

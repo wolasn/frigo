@@ -90,7 +90,9 @@ export default function RecipeDetailDialog({
   return (
     <Modal title={recipe.title} onClose={onClose}>
       <div className="space-y-5">
-        {recipe.image_url && <img src={recipe.image_url} alt="" className="aspect-[16/9] w-full rounded-lg object-cover" />}
+        {recipe.image_url && (
+          <img src={recipe.image_url} alt="" className="aspect-[16/9] w-full rounded-lg object-cover" onError={(e) => (e.currentTarget.style.display = "none")} />
+        )}
 
         <div className="flex flex-wrap items-center gap-2 text-sm text-stone-600 dark:text-stone-400">
           <SourceBadge source={recipe.source} />
@@ -158,7 +160,17 @@ export default function RecipeDetailDialog({
           />
           <div className="flex flex-wrap gap-2">
             {commentChanged && (
-              <button className={secondaryButton + " py-1.5 text-sm"} onClick={() => update({ comment: comment.trim() || null })}>
+              <button
+                className={secondaryButton + " py-1.5 text-sm"}
+                onClick={() => {
+                  if (recipe.is_pinned && !comment.trim()) {
+                    // Un repas épinglé exige un commentaire : le supprimer retire l'épingle, après confirmation.
+                    if (window.confirm("Supprimer le commentaire retire aussi l'épingle. Continuer ?")) update({ comment: null, is_pinned: false });
+                    return;
+                  }
+                  update({ comment: comment.trim() || null });
+                }}
+              >
                 Enregistrer le commentaire
               </button>
             )}

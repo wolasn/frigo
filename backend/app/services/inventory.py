@@ -119,3 +119,45 @@ def expiry_status(expires_on: date, date_type: DateType, threshold: int, today: 
     if days_left <= threshold:
         return "soon", days_left
     return "ok", days_left
+
+
+class ShelfLifeIndex:
+    """Durées de conservation préchargées (catalogue + réglages des lieux d'un inventaire) et lieux de
+    l'inventaire : mêmes règles que `_shelf_life_days`, sans une requête par aliment. Pour les calculs
+    qui parcourent beaucoup d'aliments (liste de courses)."""
+
+    def __init__(self, session: Session, inventory_id: uuid.UUID | None) -> None:
+        self.catalogue: dict[tuple, int] = {}
+        for food_id, category_id, storage, opened, days in session.execute(select(
+            FoodShelfLife.food_id, FoodShelfLife.category_id, FoodShelfLife.storage_type,
+            FoodShelfLife.is_opened, FoodShelfLife.days,
+        )):
+            key = ("food", food_id) if food_id else ("category", category_id)
+            self.catalogue[(key, storage, opened)] = days
+        self.locations: list[StorageLocation] = list(session.scalars(
+            select(StorageLocation).where(StorageLocation.inventory_id == inventory_id)
+            .order_by(StorageLocation.position, StorageLocation.name)
+        )) if inventory_id else []
+        self.overrides: dict[tuple, int] = {}
+        if self.locations:
+            for override in session.scalars(select(LocationShelfLife).where(
+                LocationShelfLife.storage_location_id.in_([l.id for l in self.locations])
+            )):
+                key = ("food", override.food_id) if override.food_id else ("category", override.category_id)
+                self.overrides[(override.storage_location_id, key)] = override.days
+
+    def catalogue_days(self, food: Food, storage: StorageType) -> int | None:
+        for key in (("food", food.id), ("category", food.category_id)):
+            days = self.catalogue.get((key, storage, False))
+            if days is not None:
+                return days
+        return None
+
+    def closed_days(self, food: Food, location: StorageLocation) -> int | None:
+        for key in (("food", food.id), ("category", food.category_id)):
+            days = self.overrides.get((location.id, key))
+            if days is None:
+                days = self.catalogue.get((key, location.storage_type, False))
+            if days is not None:
+                return days
+        return None

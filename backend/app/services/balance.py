@@ -78,14 +78,28 @@ class MealFacts:
 
 
 def recipe_facts(session: Session, recipe: Recipe) -> MealFacts:
+    return recipe_facts_many(session, [recipe])[recipe.id]
+
+
+def recipe_facts_many(session: Session, recipes: list[Recipe]) -> dict[uuid.UUID, MealFacts]:
+    """Apports de plusieurs recettes en une seule requête (la base est distante : une requête par
+    recette rendrait « Proposer des repas » lent)."""
+    by_id = {r.id: r for r in recipes}
+    rows_by_recipe: dict[uuid.UUID, list] = {rid: [] for rid in by_id}
+    if by_id:
+        for ingredient, food, category_name in session.execute(
+            select(RecipeIngredient, Food, FoodCategory.name)
+            .join(Food, Food.id == RecipeIngredient.food_id)
+            .outerjoin(FoodCategory, FoodCategory.id == Food.category_id)
+            .where(RecipeIngredient.recipe_id.in_(by_id), RecipeIngredient.is_optional.is_(False))
+        ).all():
+            rows_by_recipe[ingredient.recipe_id].append((ingredient, food, category_name))
+    return {rid: _facts(by_id[rid], rows) for rid, rows in rows_by_recipe.items()}
+
+
+def _facts(recipe: Recipe, rows: list) -> MealFacts:
     facts = MealFacts(score=float(recipe.health_score) if recipe.health_score is not None else None,
                       vegetarian=bool(recipe.is_vegetarian))
-    rows = session.execute(
-        select(RecipeIngredient, Food, FoodCategory.name)
-        .join(Food, Food.id == RecipeIngredient.food_id)
-        .outerjoin(FoodCategory, FoodCategory.id == Food.category_id)
-        .where(RecipeIngredient.recipe_id == recipe.id, RecipeIngredient.is_optional.is_(False))
-    ).all()
     servings = max(1, recipe.servings or 1)
     for ingredient, food, category_name in rows:
         group = food_group(food, category_name)
@@ -124,16 +138,11 @@ def _meal_recipe(session: Session, meal: PlannedMeal) -> Recipe | None:
 
 
 def weekly_balance(session: Session, meals: list[PlannedMeal]) -> dict:
-    cache: dict[uuid.UUID, MealFacts] = {}
-    entries: list[tuple[PlannedMeal, Recipe | None, MealFacts | None]] = []
-    for meal in meals:
-        recipe = _meal_recipe(session, meal)
-        facts = None
-        if recipe is not None:
-            if recipe.id not in cache:
-                cache[recipe.id] = recipe_facts(session, recipe)
-            facts = cache[recipe.id]
-        entries.append((meal, recipe, facts))
+    recipes = {meal.id: _meal_recipe(session, meal) for meal in meals}
+    cache = recipe_facts_many(session, list({r.id: r for r in recipes.values() if r}.values()))
+    entries: list[tuple[PlannedMeal, Recipe | None, MealFacts | None]] = [
+        (meal, recipes[meal.id], cache[recipes[meal.id].id] if recipes[meal.id] else None) for meal in meals
+    ]
 
     analyzed = [(m, r, f) for m, r, f in entries if f is not None and f.analyzed]
     days = len({m.meal_date for m in meals}) or 1

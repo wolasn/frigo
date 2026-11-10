@@ -42,6 +42,7 @@ from app.services.balance import (
     draft_value,
     is_dessert,
     recipe_facts,
+    recipe_facts_many,
     weekly_balance,
 )
 from app.services.proposals import propose
@@ -487,12 +488,14 @@ def meal_alternatives(
     inventory_ids = [meal.shared_inventory_id] if meal.shared_inventory_id else None
     options = recipe_options(session, user, meal.servings, meal.meal_date, inventory_ids, None, None, False, None)
     current_facts = recipe_facts(session, current)
+    evaluations = propose(session, user, options, limit=500)
+    all_facts = recipe_facts_many(session, [e.recipe for e in evaluations])
 
     found = []
-    for evaluation in propose(session, user, options, limit=500):
+    for evaluation in evaluations:
         if evaluation.recipe.id in week_recipes or (is_dessert(evaluation.recipe) and not is_dessert(current)):
             continue
-        meets, gain, reasons = compare(current_facts, recipe_facts(session, evaluation.recipe), focus)
+        meets, gain, reasons = compare(current_facts, all_facts[evaluation.recipe.id], focus)
         if meets:
             found.append((evaluation.missing_count, -gain, evaluation, reasons))
     found.sort(key=lambda f: (f[0] > 0, f[0], f[1]))
@@ -585,10 +588,10 @@ def suggest_meals(body: SuggestIn, session: DbSession, user: CurrentUser) -> lis
 
     state = WeekState(used=set(body.exclude))
     prefer = set(body.prefer)
-    for meal in week_meals:
-        if meal.recipe_id:
-            recipe = session.get(Recipe, meal.recipe_id)
-            state.add(recipe.id, facts_of(recipe) if recipe else None)
+    week_recipes = [r for r in (session.get(Recipe, m.recipe_id) for m in week_meals if m.recipe_id) if r]
+    facts_cache.update(recipe_facts_many(session, week_recipes))
+    for recipe in week_recipes:
+        state.add(recipe.id, facts_of(recipe))
 
     inventory_ids = [shared_id] if shared_id else None
     slot_order = sorted(set(body.slots), key=lambda s: SLOT_ORDER[s])
@@ -600,6 +603,7 @@ def suggest_meals(body: SuggestIn, session: DbSession, user: CurrentUser) -> lis
     # et les manques réels s'affichent dès qu'un brouillon est validé.
     options = recipe_options(session, user, body.servings, wanted[0][0], inventory_ids, None, None, False, None)
     servings, evaluations = options.servings, propose(session, user, options, limit=500)
+    facts_cache.update(recipe_facts_many(session, [e.recipe for e in evaluations if e.recipe.id not in facts_cache]))
     for day, slot in wanted:
         best = None
         for evaluation in evaluations:
