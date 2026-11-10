@@ -54,6 +54,7 @@ from app.services.planning import (
     Shortage,
     compute,
     recompute_reservations,
+    scope_of,
 )
 from app.services.recipes import visible_recipes_clause
 
@@ -220,7 +221,7 @@ def list_meals(
             .order_by(PlannedMeal.meal_date, PlannedMeal.position)
         )
     )
-    return _meals_out(session, user, meals, compute(session))
+    return _meals_out(session, user, meals, compute(session, scope=scope_of(session, user.id)))
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -255,14 +256,15 @@ def plan_meal(body: MealCreate, session: DbSession, user: CurrentUser) -> MealOu
     )
     session.add(meal)
     session.flush()
-    result = recompute_reservations(session)
+    result = recompute_reservations(session, scope_of(session, user.id))
     session.commit()
     return _meals_out(session, user, [meal], result)[0]
 
 
 def _move_warnings(session: Session, meal: PlannedMeal, new_date: date, new_slot: MealSlot) -> list[str]:
     """Seulement les conséquences nouvelles : un manque qui existait déjà avant n'est pas répété."""
-    return _new_warnings(session, meal, new_date, compute(session), compute(session, {meal.id: (new_date, new_slot)}))
+    scope = scope_of(session, meal.user_id)  # le groupe de celui qui a planifié le repas
+    return _new_warnings(session, meal, new_date, compute(session, scope=scope), compute(session, {meal.id: (new_date, new_slot)}, scope))
 
 
 def _new_warnings(session: Session, meal: PlannedMeal, new_date: date, before: EngineResult, after: EngineResult) -> list[str]:
@@ -312,7 +314,7 @@ def update_meal(meal_id: uuid.UUID, body: MealMove, session: DbSession, user: Cu
     if body.servings is not None:
         meal.servings = body.servings
     session.flush()
-    result = recompute_reservations(session)
+    result = recompute_reservations(session, scope_of(session, user.id))
     session.commit()
     return MoveResult(warnings=warnings, meal=_meals_out(session, user, [meal], result)[0])
 
@@ -322,7 +324,7 @@ def cancel_meal(meal_id: uuid.UUID, session: DbSession, user: CurrentUser) -> Me
     meal = _get_meal(session, user, meal_id, edit=True)
     meal.status = MealStatus.CANCELLED
     session.flush()
-    result = recompute_reservations(session)
+    result = recompute_reservations(session, scope_of(session, user.id))
     session.commit()
     return _meals_out(session, user, [meal], result)[0]
 
@@ -339,7 +341,7 @@ def mark_done(meal_id: uuid.UUID, body: DoneIn, session: DbSession, user: Curren
     when = max(meal.meal_date, today())
     taken_by_meal = [
         (item_id, quantity)
-        for meal_id, item_id, quantity in compute(session, {meal.id: (when, meal.slot)}).reservations
+        for meal_id, item_id, quantity in compute(session, {meal.id: (when, meal.slot)}, scope_of(session, user.id)).reservations
         if meal_id == meal.id
     ]
     now = datetime.now(UTC)
@@ -367,7 +369,7 @@ def mark_done(meal_id: uuid.UUID, body: DoneIn, session: DbSession, user: Curren
             _create_leftover(session, user, meal, body.leftover_portions)
 
     session.flush()
-    result = recompute_reservations(session)
+    result = recompute_reservations(session, scope_of(session, user.id))
     session.commit()
     return _meals_out(session, user, [meal], result)[0]
 
@@ -518,16 +520,16 @@ def replace_recipe(meal_id: uuid.UUID, body: ReplaceIn, session: DbSession, user
     if recipe is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Recette introuvable.")
 
-    before = compute(session)
+    before = compute(session, scope=scope_of(session, user.id))
     savepoint = session.begin_nested()
     meal.recipe_id = recipe.id
     session.flush()
-    warnings = _new_warnings(session, meal, meal.meal_date, before, compute(session))
+    warnings = _new_warnings(session, meal, meal.meal_date, before, compute(session, scope=scope_of(session, user.id)))
     if not body.confirm:
         savepoint.rollback()
         return MoveResult(warnings=warnings)
     savepoint.commit()
-    result = recompute_reservations(session)
+    result = recompute_reservations(session, scope_of(session, user.id))
     session.commit()
     return MoveResult(warnings=warnings, meal=_meals_out(session, user, [meal], result)[0])
 

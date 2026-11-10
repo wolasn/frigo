@@ -171,3 +171,51 @@ def test_agenda_partage_droits(client, db_session, env):
     assert [m["agenda_name"] for m in listed] == ["Coloc"] and listed[0]["can_edit"] is False
     assert client.patch(f"/api/agenda/{listed[0]['id']}", json={"meal_date": day(3)}).status_code == 403
     assert client.post(f"/api/agenda/{listed[0]['id']}/done", json={}).status_code == 200
+
+
+def test_reservation_infime_ignoree(client, db_session, env):
+    """Une part trop petite pour la précision de la base (millième) ne bloque pas le recalcul."""
+    from decimal import Decimal
+
+    from app.models import Recipe, RecipeIngredient
+    from app.models.enums import RecipeSource, RecipeStatus
+
+    recipe = Recipe(title="test-pincee", source=RecipeSource.AI, status=RecipeStatus.COMPLETE, servings=6,
+                    difficulty=Difficulty.EASY)
+    db_session.add(recipe)
+    db_session.flush()
+    db_session.add(RecipeIngredient(recipe_id=recipe.id, position=0, raw_text="1 mg de testcarotte",
+                                    food_id=env["carotte"].id, quantity=Decimal("0.001"), unit="g",
+                                    quantity_ref=Decimal("0.001")))
+    db_session.flush()
+    env["stock"](500, 10)
+    response = client.post("/api/agenda", json={"recipe_id": str(recipe.id), "meal_date": day(1), "slot": "dinner", "servings": 1})
+    assert response.status_code == 201, response.text  # 0,001 g × 1/6 ≈ 0,0002 g : arrondi à 0, ignoré
+
+
+def test_recalcul_limite_au_groupe(client, db_session, env):
+    """Le moteur ne recalcule que le groupe de l'utilisateur ; les réservations des autres restent."""
+    from app.models import InventoryMember, Reservation, User
+    from app.services.planning import scope_of
+
+    env["stock"](1000, 10)
+    alice_meal = env["plan"](1).json()
+    env["login"]("bob")
+    bob_inventory = client.get("/api/inventories").json()[0]
+    fridge = next(l["id"] for l in bob_inventory["locations"] if l["storage_type"] == "fridge")
+    client.post(f"/api/inventories/{bob_inventory['id']}/items", json={
+        "food_id": str(env["carotte"].id), "quantity": 1000, "unit": "g", "storage_location_id": fridge, "expires_on": day(10)})
+    bob_meal = env["plan"](2).json()
+    reserved = lambda meal: db_session.scalar(select(Reservation.quantity).where(Reservation.planned_meal_id == meal["id"]))
+    assert reserved(alice_meal) == 500 and reserved(bob_meal) == 500
+
+    alice = db_session.scalar(select(User).where(User.username == "alice"))
+    bob = db_session.scalar(select(User).where(User.username == "bob"))
+    assert scope_of(db_session, bob.id).users == {bob.id}  # rien de partagé : groupe d'une personne
+    client.post(f"/api/agenda/{bob_meal['id']}/cancel")  # action de Bob : la réservation d'Alice reste
+    assert reserved(alice_meal) == 500 and reserved(bob_meal) is None
+
+    shared = client.post("/api/inventories", json={"name": "Coloc groupe"}).json()
+    db_session.add(InventoryMember(inventory_id=shared["id"], user_id=alice.id, role=MemberRole.MEMBER))
+    db_session.flush()
+    assert scope_of(db_session, bob.id).users == {alice.id, bob.id}  # reliés par l'inventaire partagé

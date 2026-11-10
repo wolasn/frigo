@@ -37,10 +37,21 @@ def conversion_factor(session: Session, food: Food, unit: str) -> Decimal:
             allowed = ", ".join(UNITS_BY_REFERENCE[food.reference_unit])
             raise UnitError(f"Unité « {unit} » impossible pour « {food.name} ». Unités possibles : {allowed}.")
         return Decimal(specific)
-    generic = session.scalar(
-        select(UnitConversion.factor).where(UnitConversion.food_id.is_(None), UnitConversion.from_unit == unit)
-    )
+    generic = _generic_factors(session).get(unit)
     return Decimal(generic) if generic is not None else Decimal(1)
+
+
+_GENERIC: dict[str, Decimal] = {}
+
+
+def _generic_factors(session: Session) -> dict[str, Decimal]:
+    """Conversions générales (kg → g, l → ml…) : données de départ qui ne changent pas, lues une fois
+    par processus au lieu d'une requête par quantité affichée (1000 articles = 2000 requêtes sinon)."""
+    if not _GENERIC:
+        _GENERIC.update(session.execute(
+            select(UnitConversion.from_unit, UnitConversion.factor).where(UnitConversion.food_id.is_(None))
+        ).tuples().all())
+    return _GENERIC
 
 
 def to_reference(session: Session, food: Food, quantity: Decimal, unit: str) -> Decimal:

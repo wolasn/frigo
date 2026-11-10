@@ -33,7 +33,7 @@ from app.services.inventory import (
     require_location,
     require_membership,
 )
-from app.services.planning import recompute_reservations, reserved_by_item
+from app.services.planning import recompute_reservations, reserved_by_item, scope_of
 from app.services.units import UNITS_BY_REFERENCE, UnitError, from_reference, normalize_unit, to_reference
 
 router = APIRouter(prefix="/api", tags=["inventaire"])
@@ -321,7 +321,7 @@ def add_item(inventory_id: uuid.UUID, body: ItemCreate, session: DbSession, user
     )
     session.add(item)
     session.flush()
-    recompute_reservations(session)  # tout changement de stock peut déplacer les réservations
+    recompute_reservations(session, scope_of(session, user.id))  # tout changement de stock peut déplacer les réservations
     session.commit()
     return _single_item_out(session, user, item)
 
@@ -358,7 +358,7 @@ def update_item(item_id: uuid.UUID, body: ItemUpdate, session: DbSession, user: 
     if item.kind == ItemKind.LEFTOVER and item.date_type == DateType.BEST_BEFORE:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Un reste a une date limite de consommation.")
     session.flush()
-    recompute_reservations(session)  # tout changement de stock peut déplacer les réservations
+    recompute_reservations(session, scope_of(session, user.id))  # tout changement de stock peut déplacer les réservations
     session.commit()
     return _single_item_out(session, user, item)
 
@@ -389,7 +389,7 @@ def remove_item(item_id: uuid.UUID, body: RemoveIn, session: DbSession, user: Cu
         item.quantity = Decimal(0)
         item.archived_at = datetime.now(UTC)
     session.flush()
-    recompute_reservations(session)  # tout changement de stock peut déplacer les réservations
+    recompute_reservations(session, scope_of(session, user.id))  # tout changement de stock peut déplacer les réservations
     session.commit()
     return _single_item_out(session, user, item)
 
@@ -443,6 +443,6 @@ def restore_removal(removal_id: uuid.UUID, session: DbSession, user: CurrentUser
     item.archived_at = None
     removal.undone_at = datetime.now(UTC)
     session.flush()
-    recompute_reservations(session)  # tout changement de stock peut déplacer les réservations
+    recompute_reservations(session, scope_of(session, user.id))  # tout changement de stock peut déplacer les réservations
     session.commit()
     return _single_item_out(session, user, item)

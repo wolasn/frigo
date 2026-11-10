@@ -138,6 +138,10 @@ def _meal_recipe(session: Session, meal: PlannedMeal) -> Recipe | None:
 
 
 def weekly_balance(session: Session, meals: list[PlannedMeal]) -> dict:
+    # Recettes et restes lus en deux requêtes, pas une par repas (140 repas par semaine possibles).
+    # (gardés dans une variable : la session ne retient ses objets que tant qu'ils sont référencés)
+    preloaded = session.scalars(select(Recipe).where(Recipe.id.in_({m.recipe_id for m in meals if m.recipe_id}))).all()
+    preloaded += session.scalars(select(InventoryItem).where(InventoryItem.id.in_({m.leftover_item_id for m in meals if m.leftover_item_id}))).all()
     recipes = {meal.id: _meal_recipe(session, meal) for meal in meals}
     cache = recipe_facts_many(session, list({r.id: r for r in recipes.values() if r}.values()))
     entries: list[tuple[PlannedMeal, Recipe | None, MealFacts | None]] = [

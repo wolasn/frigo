@@ -23,7 +23,7 @@ from app.models import (
 )
 from app.models.enums import DateType, InventoryKind, ItemKind, ItemUnit, ShoppingOrigin
 from app.services.inventory import estimate_expiry
-from app.services.planning import recompute_reservations
+from app.services.planning import recompute_reservations, scope_of
 from app.services.inventory import ShelfLifeIndex
 from app.services.shopping import default_location, freeze_from, meal_titles, regenerate, target_inventory_id
 from app.services.units import UnitError, normalize_unit, to_reference
@@ -133,7 +133,7 @@ def _lines(session: Session, user: User, shared_inventory_id: uuid.UUID | None) 
 @router.get("")
 def list_shopping(session: DbSession, user: CurrentUser) -> list[ShoppingListOut]:
     """Recalcule les lignes générées puis renvoie la liste personnelle et les listes partagées."""
-    result = recompute_reservations(session)  # un seul calcul du moteur pour toutes les listes
+    result = recompute_reservations(session, scope_of(session, user.id))  # un seul calcul du moteur pour toutes les listes
     regenerate(session, user, None, result)
     shared = _shared_inventories(session, user)
     for inventory in shared:
@@ -214,7 +214,7 @@ def purchase(body: PurchaseIn, session: DbSession, user: CurrentUser) -> Purchas
         item.purchased_at, item.purchased_by = now, user.id
         removed += 1
     session.flush()
-    recompute_reservations(session)
+    recompute_reservations(session, scope_of(session, user.id))
     session.commit()
     return PurchaseOut(added_to_inventory=added, removed_from_list=removed)
 

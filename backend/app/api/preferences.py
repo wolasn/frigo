@@ -17,7 +17,7 @@ from app.models import (
     UserPreferences,
 )
 from app.models.enums import Diet, ExclusionReason
-from app.services.planning import recompute_reservations
+from app.services.planning import recompute_reservations, scope_of
 
 router = APIRouter(prefix="/api/preferences", tags=["préférences"])
 
@@ -179,7 +179,7 @@ def add_basic(food_id: uuid.UUID, session: DbSession, user: CurrentUser) -> Pref
     if not food.is_always_infinite and session.get(UserInfiniteFood, (user.id, food.id)) is None:
         session.add(UserInfiniteFood(user_id=user.id, food_id=food.id))
         session.flush()
-        recompute_reservations(session)
+        recompute_reservations(session, scope_of(session, user.id))
     session.commit()
     return _out(session, user)
 
@@ -191,6 +191,6 @@ def remove_basic(food_id: uuid.UUID, session: DbSession, user: CurrentUser) -> P
         raise HTTPException(status.HTTP_409_CONFLICT, detail=f"« {food.name} » est toujours disponible pour tout le monde.")
     session.execute(delete(UserInfiniteFood).where(UserInfiniteFood.user_id == user.id, UserInfiniteFood.food_id == food_id))
     session.flush()
-    recompute_reservations(session)
+    recompute_reservations(session, scope_of(session, user.id))
     session.commit()
     return _out(session, user)

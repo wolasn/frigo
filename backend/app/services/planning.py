@@ -189,21 +189,55 @@ def _run(plans: list[MealPlan], data: _Data) -> EngineResult:
     return result
 
 
-def _future_meals(session: Session, include: set[uuid.UUID]) -> list[PlannedMeal]:
+@dataclass(frozen=True)
+class Scope:
+    """Groupe d'utilisateurs dont les repas peuvent se disputer le même stock : un utilisateur, les
+    membres des inventaires qu'il partage, les membres des inventaires que ceux-ci partagent, etc.
+    Les autres utilisateurs n'ont aucun stock en commun : inutile de recalculer leurs repas."""
+
+    users: frozenset
+    inventories: frozenset
+
+    def meals_clause(self):
+        return PlannedMeal.user_id.in_(self.users) | PlannedMeal.shared_inventory_id.in_(self.inventories)
+
+
+def scope_of(session: Session, *user_ids: uuid.UUID) -> Scope:
+    users, inventories = set(user_ids), set()
+    while True:
+        new_inventories = set(session.scalars(
+            select(InventoryMember.inventory_id).where(InventoryMember.user_id.in_(users)))) - inventories
+        if not new_inventories:
+            break
+        inventories |= new_inventories
+        new_users = set(session.scalars(
+            select(InventoryMember.user_id).where(InventoryMember.inventory_id.in_(new_inventories)))) - users
+        if not new_users:
+            break
+        users |= new_users
+    return Scope(frozenset(users), frozenset(inventories))
+
+
+def _future_meals(session: Session, include: set[uuid.UUID], scope: Scope | None) -> list[PlannedMeal]:
     condition = PlannedMeal.meal_date >= today()
     if include:
         condition = condition | PlannedMeal.id.in_(include)
-    return list(session.scalars(select(PlannedMeal).where(PlannedMeal.status == MealStatus.PLANNED, condition)))
+    query = select(PlannedMeal).where(PlannedMeal.status == MealStatus.PLANNED, condition)
+    if scope is not None:
+        query = query.where(scope.meals_clause())
+    return list(session.scalars(query))
 
 
 def compute(
     session: Session,
     overrides: dict[uuid.UUID, tuple[date, MealSlot]] | None = None,
+    scope: Scope | None = None,
 ) -> EngineResult:
     """Calcule sans rien écrire. `overrides` simule le déplacement de repas ; un repas passé
-    présent dans `overrides` est aussi pris en compte (pour le cocher « cuisiné » après coup)."""
+    présent dans `overrides` est aussi pris en compte (pour le cocher « cuisiné » après coup).
+    `scope` : seulement les repas de ce groupe d'utilisateurs (vide = tout le monde)."""
     overrides = overrides or {}
-    meals = _future_meals(session, set(overrides))
+    meals = _future_meals(session, set(overrides), scope)
     plans = []
     for meal in meals:
         meal_date, slot = overrides.get(meal.id, (meal.meal_date, meal.slot))
@@ -212,15 +246,23 @@ def compute(
     return _run(plans, _load(session, meals))
 
 
-def recompute_reservations(session: Session) -> EngineResult:
-    """Recalcule et enregistre toutes les réservations. Appelé après chaque changement."""
-    result = compute(session)
-    session.execute(delete(Reservation))
-    if result.reservations:  # une seule requête pour toutes les lignes (base distante)
-        session.execute(insert(Reservation.__table__), [
-            {"planned_meal_id": meal_id, "inventory_item_id": item_id, "quantity": quantity}
-            for meal_id, item_id, quantity in result.reservations
-        ])
+def recompute_reservations(session: Session, scope: Scope | None = None) -> EngineResult:
+    """Recalcule et enregistre les réservations (du groupe `scope`, ou de tous). Appelé après chaque changement."""
+    result = compute(session, scope=scope)
+    if scope is None:
+        session.execute(delete(Reservation))
+    else:
+        session.execute(delete(Reservation).where(Reservation.planned_meal_id.in_(
+            select(PlannedMeal.id).where(scope.meals_clause()))))
+    # Arrondi à la précision de la colonne (millième) : une part infime (0,0004 g) vaudrait 0 en base et
+    # violerait la contrainte « quantité positive », ce qui bloquerait tout le recalcul.
+    rows = [
+        {"planned_meal_id": meal_id, "inventory_item_id": item_id, "quantity": rounded}
+        for meal_id, item_id, quantity in result.reservations
+        if (rounded := Decimal(quantity).quantize(Decimal("0.001"))) > 0
+    ]
+    if rows:  # une seule requête pour toutes les lignes (base distante)
+        session.execute(insert(Reservation.__table__), rows)
     session.flush()
     return result
 

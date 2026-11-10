@@ -42,7 +42,7 @@ from app.models.enums import (
 )
 from app.services.health import score_from_foods
 from app.services.ingredients import ParsedIngredient, to_reference_quantity
-from app.services.planning import recompute_reservations
+from app.services.planning import recompute_reservations, scope_of
 from app.services.proposals import UNIT_DISPLAY
 from app.services.recipes import visible_recipes_clause
 
@@ -325,7 +325,11 @@ def update_recipe(recipe_id: uuid.UUID, body: RecipeIn, session: DbSession, user
     _write_content(session, user, recipe, body)
     if recipe.status == RecipeStatus.DRAFT:
         session.execute(delete(RecipeShare).where(RecipeShare.recipe_id == recipe.id))  # un brouillon ne se partage pas
-    recompute_reservations(session)  # les quantités ont pu changer pour des repas prévus
+    # Les quantités ont pu changer : seulement pour ceux qui ont prévu cette recette (et leur groupe).
+    planners = set(session.scalars(select(PlannedMeal.user_id).where(
+        PlannedMeal.recipe_id == recipe.id, PlannedMeal.status == MealStatus.PLANNED)))
+    if planners:
+        recompute_reservations(session, scope_of(session, *planners))
     session.commit()
     return _edit_view(session, recipe)
 
@@ -365,9 +369,8 @@ def delete_recipe(recipe_id: uuid.UUID, session: DbSession, user: CurrentUser) -
     if planned:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="Cette recette est prévue dans un agenda : annule d'abord ces repas.")
     session.execute(delete(PlannedMeal).where(PlannedMeal.recipe_id == recipe.id))  # repas passés ou annulés
-    session.delete(recipe)
+    session.delete(recipe)  # aucun repas prévu ne l'utilise : pas de réservation à recalculer
     session.flush()
-    recompute_reservations(session)
     session.commit()
 
 
