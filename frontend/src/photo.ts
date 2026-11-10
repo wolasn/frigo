@@ -4,10 +4,16 @@ export type CapturedPhoto = { id: string; preview: string; mediaType: string; da
 
 const MAX_SIDE = 1600; // assez pour lire une date sur un emballage, léger à envoyer
 const QUALITY = 0.85;
+let counter = 0; // crypto.randomUUID n'existe qu'en contexte sécurisé : absent sur http://192.168.x.x
+
+function newId(): string {
+  counter += 1;
+  return `photo-${Date.now()}-${counter}`;
+}
 
 function canvasToPhoto(canvas: HTMLCanvasElement): CapturedPhoto {
   const dataUrl = canvas.toDataURL("image/jpeg", QUALITY);
-  return { id: crypto.randomUUID(), preview: dataUrl, mediaType: "image/jpeg", data: dataUrl.slice(dataUrl.indexOf(",") + 1) };
+  return { id: newId(), preview: dataUrl, mediaType: "image/jpeg", data: dataUrl.slice(dataUrl.indexOf(",") + 1) };
 }
 
 function drawScaled(source: CanvasImageSource, width: number, height: number): HTMLCanvasElement {
@@ -21,11 +27,28 @@ function drawScaled(source: CanvasImageSource, width: number, height: number): H
 
 /** Photo choisie dans les fichiers : redressée (orientation EXIF), réduite, convertie en JPEG. */
 export async function photoFromFile(file: File): Promise<CapturedPhoto> {
-  const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
   try {
-    return canvasToPhoto(drawScaled(bitmap, bitmap.width, bitmap.height));
+    const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+    try {
+      return canvasToPhoto(drawScaled(bitmap, bitmap.width, bitmap.height));
+    } finally {
+      bitmap.close();
+    }
+  } catch {
+    return photoFromImageElement(file); // navigateurs sans createImageBitmap (ou sans ses options)
+  }
+}
+
+/** Secours : décodage par une balise image, qui applique aussi l'orientation EXIF. */
+async function photoFromImageElement(file: File): Promise<CapturedPhoto> {
+  const url = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    return canvasToPhoto(drawScaled(image, image.naturalWidth, image.naturalHeight));
   } finally {
-    bitmap.close();
+    URL.revokeObjectURL(url);
   }
 }
 
