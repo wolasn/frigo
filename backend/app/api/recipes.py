@@ -15,6 +15,7 @@ from app.models.enums import Diet, Difficulty, RecipeSource, RecipeStatus, UserR
 from app.services.ai_recipes import AiError, GenerationRequest
 from app.services.ai_recipes import generate as ai_generate
 from app.services.marmiton import MarmitonError
+from app.services.ai_usage import recorder
 from app.services.settings import get_setting
 from app.services.proposals import (
     Evaluation,
@@ -359,8 +360,9 @@ def generate_recipes(body: GenerateIn, session: DbSession, user: CurrentUser) ->
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
                             detail=f"Limite atteinte : {AI_DAILY_LIMIT} recettes IA par jour. Réessaie demain.")
     try:
-        generated = ai_generate(_generation_request(session, user, body))
+        generated = ai_generate(_generation_request(session, user, body), on_usage=recorder(session, user, "recipe"))
     except AiError as error:
+        session.commit()  # le coût d'un appel facturé mais inutilisable est gardé
         if not error.needs_admin:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=str(error)) from None
         # Clé expirée ou révoquée, crédit épuisé… : seul le super-administrateur peut corriger.

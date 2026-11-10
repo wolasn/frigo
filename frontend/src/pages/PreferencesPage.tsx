@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { api, type AdminSettings, type Category, type Food, type Preferences, type User } from "../api";
+import { api, type AdminSettings, type AiUsage, type Category, type UsageCall, type UserUsage, type Food, type Preferences, type User } from "../api";
 import { ErrorMessage, Field, inputClass, primaryButton, secondaryButton, Loading } from "../components/ui";
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
@@ -123,6 +123,7 @@ export default function PreferencesPage({ user, onUserChanged, onAccountDeleted 
       {message && <p className="rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-700 dark:bg-stone-800 dark:text-brand-500">{message}</p>}
 
       {user.role === "super_admin" && <AdminSettingsSection />}
+      {user.role === "super_admin" && <AiUsageSection />}
 
       <Section title="Repas" hint="Valeurs utilisées par défaut dans les propositions de repas.">
         <div className="grid max-w-md grid-cols-2 gap-3">
@@ -380,5 +381,129 @@ function AdminSettingsSection() {
         <ErrorMessage message={failure} />
       </div>
     </Section>
+  );
+}
+
+const dollars = (value: number) => `${value < 1 ? value.toFixed(4) : value.toFixed(2)} $`.replace(".", ",");
+const MODEL_LABELS: Record<string, string> = {
+  "claude-opus-5-5": "Opus 5.5",
+  "claude-sonnet-5-5": "Sonnet 5.5",
+  "claude-haiku-5-5": "Haiku 5.5",
+};
+
+/** Coût de l'IA par utilisateur (super-administrateur) : total du mois, détail des appels au clic. */
+function AiUsageSection() {
+  const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [allTime, setAllTime] = useState(false);
+  const [usage, setUsage] = useState<AiUsage | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
+  const [calls, setCalls] = useState<UsageCall[] | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const period = allTime ? undefined : month;
+
+  useEffect(() => {
+    setUsage(null);
+    setOpen(null);
+    api.aiUsage(period).then(setUsage).catch(() => setFailure("Impossible de lire les coûts de l'IA."));
+  }, [period]);
+
+  const keyOf = (u: UserUsage) => u.user_id ?? `supprimé:${u.username}`;
+
+  function toggle(u: UserUsage) {
+    const key = keyOf(u);
+    if (open === key) {
+      setOpen(null);
+      return;
+    }
+    setOpen(key);
+    setCalls(null);
+    api.aiUsageDetail(key, period).then(setCalls).catch(() => setCalls([]));
+  }
+
+  return (
+    <Section title="Administration · coûts de l'IA" hint="Coût estimé à chaque appel (recettes IA et analyses photo), d'après les jetons et les tarifs publics.">
+      <div className="space-y-3 text-sm">
+        <div className="flex flex-wrap items-center gap-3">
+          <input type="month" className={inputClass + " w-auto"} value={month} onChange={(e) => e.target.value && setMonth(e.target.value)} disabled={allTime} aria-label="Mois" />
+          <label className="flex items-center gap-1.5">
+            <input type="checkbox" checked={allTime} onChange={(e) => setAllTime(e.target.checked)} /> Depuis le début
+          </label>
+        </div>
+        <ErrorMessage message={failure} />
+        {!usage ? (
+          !failure && <Loading inline />
+        ) : (
+          <>
+            <p>
+              Total : <strong>{dollars(usage.total.cost_usd)}</strong> pour {usage.total.calls} appel(s)
+            </p>
+            {usage.users.length === 0 ? (
+              <p className="text-stone-500">Aucun appel à l'IA sur cette période.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead className="text-xs text-stone-500">
+                    <tr>
+                      <th className="py-1 pr-2 font-medium">Utilisateur</th>
+                      <th className="py-1 pr-2 text-right font-medium">Recettes</th>
+                      <th className="py-1 pr-2 text-right font-medium">Photos</th>
+                      <th className="py-1 text-right font-medium">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-stone-200 dark:divide-stone-800">
+                    {usage.users.map((u) => (
+                      <UsageRow key={keyOf(u)} user={u} open={open === keyOf(u)} calls={calls} onToggle={() => toggle(u)} />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </Section>
+  );
+}
+
+function UsageRow({ user, open, calls, onToggle }: { user: UserUsage; open: boolean; calls: UsageCall[] | null; onToggle: () => void }) {
+  return (
+    <>
+      <tr className="cursor-pointer hover:bg-stone-50 dark:hover:bg-stone-800" onClick={onToggle}>
+        <td className="py-1.5 pr-2">
+          {open ? "▾" : "▸"} {user.display_name ?? user.username}
+          <span className="text-xs text-stone-500"> · {user.user_id ? user.username : "compte supprimé"}</span>
+        </td>
+        <td className="py-1.5 pr-2 text-right">
+          {dollars(user.recipes.cost_usd)} <span className="text-xs text-stone-500">({user.recipes.calls})</span>
+        </td>
+        <td className="py-1.5 pr-2 text-right">
+          {dollars(user.photos.cost_usd)} <span className="text-xs text-stone-500">({user.photos.calls})</span>
+        </td>
+        <td className="py-1.5 text-right font-medium">{dollars(user.cost_usd)}</td>
+      </tr>
+      {open && (
+        <tr>
+          <td colSpan={4} className="pb-2">
+            {calls === null ? (
+              <Loading inline />
+            ) : (
+              <ul className="max-h-60 space-y-0.5 overflow-y-auto rounded-lg bg-stone-50 p-2 text-xs dark:bg-stone-950">
+                {calls.map((c, i) => (
+                  <li key={i} className="flex flex-wrap justify-between gap-2">
+                    <span>
+                      {new Date(c.created_at).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" })} ·{" "}
+                      {c.kind === "recipe" ? "recette" : "photo"} · {MODEL_LABELS[c.model] ?? c.model}
+                    </span>
+                    <span className="text-stone-500">
+                      {c.input_tokens} + {c.output_tokens} jetons · <span className="text-stone-700 dark:text-stone-300">{dollars(c.cost_usd)}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
   );
 }

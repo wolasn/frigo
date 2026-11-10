@@ -129,7 +129,8 @@ def _parse(data: dict) -> list[DetectedItem]:
 # ---------- Moteur API Claude ----------
 
 
-def analyze_with_claude(photos: list[Photo], catalogue_names: list[str], today: date, client: Any | None = None) -> list[DetectedItem]:
+def analyze_with_claude(photos: list[Photo], catalogue_names: list[str], today: date, client: Any | None = None,
+                        on_usage: Any | None = None) -> list[DetectedItem]:
     if client is None:
         key = read_secret("anthropic_api_key")
         if not key:
@@ -170,6 +171,8 @@ def analyze_with_claude(photos: list[Photo], catalogue_names: list[str], today: 
 
     logger.info("Analyse photo : modèle %s, %s photo(s), %s jetons en entrée, %s en sortie",
                 response.model, len(photos), response.usage.input_tokens, response.usage.output_tokens)
+    if on_usage:
+        on_usage(response.model, response.usage.input_tokens, response.usage.output_tokens)
     if response.stop_reason == "refusal":
         raise AiError("L'IA a refusé d'analyser ces photos.")
     if response.stop_reason == "max_tokens":
@@ -188,7 +191,7 @@ DEFAULT_LOCAL_MODEL = "qwen2.5vl:7b"
 
 
 def analyze_with_ollama(photos: list[Photo], catalogue_names: list[str], today: date, url: str, model: str,
-                        transport: httpx.BaseTransport | None = None) -> list[DetectedItem]:
+                        transport: httpx.BaseTransport | None = None, on_usage: Any | None = None) -> list[DetectedItem]:
     body = {
         "model": model,
         "stream": False,
@@ -208,6 +211,12 @@ def analyze_with_ollama(photos: list[Photo], catalogue_names: list[str], today: 
         raise AiError(f"Le modèle local « {model} » n'est pas installé : lance « ollama pull {model} ».", "access")
     if response.status_code >= 400:
         raise AiError(f"Le modèle local a renvoyé une erreur ({response.status_code}).", "temporary")
+    if on_usage:  # gratuit, mais compté pour le suivi
+        try:
+            data = response.json()
+        except ValueError:
+            data = {}
+        on_usage(f"local:{model}", data.get("prompt_eval_count") or 0, data.get("eval_count") or 0)
     try:
         return _parse(json.loads(response.json()["message"]["content"]))
     except (KeyError, json.JSONDecodeError, TypeError):

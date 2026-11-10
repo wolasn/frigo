@@ -92,6 +92,11 @@ export type ScanLineEdit = {
   merge?: boolean;
 };
 
+export type UsageTotals = { calls: number; input_tokens: number; output_tokens: number; cost_usd: number };
+export type UserUsage = UsageTotals & { user_id: string | null; username: string; display_name: string | null; recipes: UsageTotals; photos: UsageTotals };
+export type AiUsage = { month: string | null; total: UsageTotals; users: UserUsage[] };
+export type UsageCall = { created_at: string; kind: "recipe" | "photo"; model: string; input_tokens: number; output_tokens: number; cost_usd: number };
+
 export type AdminSettings = {
   photo_engine: "claude" | "local";
   photo_local_url: string;
@@ -396,6 +401,9 @@ export const api = {
   validateScan: (id: string, lines: ScanLineEdit[]) =>
     request<{ added: number; merged: number }>("POST", `/api/photo-scans/${id}/validate`, { lines }),
   cancelScan: (id: string) => request<void>("POST", `/api/photo-scans/${id}/cancel`),
+  aiUsage: (month?: string) => request<AiUsage>("GET", `/api/admin/ai-usage?${query({ month })}`),
+  aiUsageDetail: (userKey: string, month?: string) =>
+    request<UsageCall[]>("GET", `/api/admin/ai-usage/${encodeURIComponent(userKey)}?${query({ month })}`),
   adminSettings: () => request<AdminSettings>("GET", "/api/admin/settings"),
   updateAdminSettings: (body: Partial<AdminSettings>) => request<AdminSettings>("PATCH", "/api/admin/settings", body),
   searchFoods: (q: string) => request<Food[]>("GET", `/api/foods?q=${encodeURIComponent(q)}`),

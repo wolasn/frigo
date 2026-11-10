@@ -73,7 +73,7 @@ def test_moteur_local_ollama():
 
 @pytest.fixture
 def alice(client, db_session, monkeypatch):
-    monkeypatch.setattr(photo_api, "analyze_with_claude", lambda photos, names, day: analyze_with_claude(photos, names, day, FakeClaude()))
+    monkeypatch.setattr(photo_api, "analyze_with_claude", lambda photos, names, day, **kw: analyze_with_claude(photos, names, day, FakeClaude(), **kw))
     client.post("/api/auth/register", json={"username": "alice", "display_name": "Alice", "password": PASSWORD})
     if db_session.scalar(select(Food).where(Food.name == "Carotte", Food.owner_user_id.is_(None))) is None:
         pytest.skip("catalogue non chargé")
@@ -129,7 +129,7 @@ def test_photos_invalides(client, alice):
 def test_echec_de_l_analyse(client, alice, monkeypatch):
     from app.services.ai_recipes import AiError
 
-    def broken(photos, names, day):
+    def broken(photos, names, day, **_):
         raise AiError("Impossible de joindre l'API Claude.", "temporary")
 
     monkeypatch.setattr(photo_api, "analyze_with_claude", broken)
@@ -148,7 +148,7 @@ def test_reglage_du_mode_par_le_super_admin(client, db_session, alice, monkeypat
 
     used = {}
 
-    def local(photos, names, day, url, model):
+    def local(photos, names, day, url, model, **_):
         used.update(url=url, model=model)
         return []
 

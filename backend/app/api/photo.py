@@ -33,6 +33,7 @@ from app.models import (
 from app.models.enums import DateType, ItemKind, ItemUnit, LineDecision, ScanEngine, ScanStatus, StorageType, UserRole
 from app.services.ai_alerts import alert_admin
 from app.services.ai_recipes import AiError
+from app.services.ai_usage import recorder
 from app.services.ingredients import FoodMatcher
 from app.services.inventory import estimate_expiry, require_location
 from app.services.photo import (
@@ -196,14 +197,15 @@ def analyze(body: ScanIn, session: DbSession, user: CurrentUser) -> ScanOut:
     session.add(scan)
     session.flush()
 
+    usage = recorder(session, user, "photo")
     matcher = FoodMatcher(session)
     catalogue = sorted({f.name for f in matcher.foods.values() if not f.is_always_infinite})
     try:
         if engine == ScanEngine.LOCAL:
             items = analyze_with_ollama(photos, catalogue, today(), get_setting(session, "photo_local_url"),
-                                        get_setting(session, "photo_local_model"))
+                                        get_setting(session, "photo_local_model"), on_usage=usage)
         else:
-            items = analyze_with_claude(photos, catalogue, today())
+            items = analyze_with_claude(photos, catalogue, today(), on_usage=usage)
     except AiError as error:
         photos.clear()
         scan.status, scan.error_message, scan.finished_at = ScanStatus.FAILED, str(error)[:500], datetime.now(UTC)

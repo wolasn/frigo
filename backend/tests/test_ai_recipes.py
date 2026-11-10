@@ -92,7 +92,7 @@ def catalogue(db_session):
     db_session.flush()
 
 
-def fake_generate(request):
+def fake_generate(request, **_):
     raw = ANSWER["recipes"][0]
     return [GeneratedRecipe(**raw)] * request.count
 
@@ -165,7 +165,7 @@ def promote(db_session, username):
 
 
 def test_cle_expiree_previent_le_super_admin_une_fois_par_jour(client, db_session, monkeypatch, no_real_alert_email):
-    def expired(request):
+    def expired(request, **_):
         raise AiError("La clé d'API Claude est refusée : elle a peut-être expiré ou été révoquée.", "key")
 
     monkeypatch.setattr(recipes_api, "ai_generate", expired)
@@ -221,7 +221,7 @@ def test_modele_choisi_et_repli(model, fallback):
 def test_modele_des_recettes_regle_par_le_super_admin(client, db_session, catalogue, monkeypatch):
     seen = []
 
-    def capture(req):
+    def capture(req, **_):
         seen.append(req.model)
         return fake_generate(req)
 

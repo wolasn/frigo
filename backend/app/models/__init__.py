@@ -1,6 +1,14 @@
 """Tous les modèles, importés ici pour qu'Alembic les voie dans Base.metadata."""
 
-from app.models.accounts import AppSetting, AuthSession, User, UserCategoryThreshold, UserExcludedFood, UserPreferences
+from app.models.accounts import (
+    AiUsage,
+    AppSetting,
+    AuthSession,
+    User,
+    UserCategoryThreshold,
+    UserExcludedFood,
+    UserPreferences,
+)
 from app.models.base import Base
 from app.models.catalog import Food, FoodAlias, FoodCategory, FoodShelfLife, UnitConversion, UserInfiniteFood
 from app.models.inventory import (
@@ -27,7 +35,7 @@ from app.models.recipes import (
 )
 
 __all__ = [
-    "AppSetting", "AuthSession", "Base", "Food", "FoodAlias", "FoodCategory", "FoodShelfLife", "Inventory",
+    "AiUsage", "AppSetting", "AuthSession", "Base", "Food", "FoodAlias", "FoodCategory", "FoodShelfLife", "Inventory",
     "InventoryInvitation", "InventoryItem", "InventoryMember", "InventoryRemoval", "LocationShelfLife", "MarmitonSearchCache",
     "Notification", "PhotoScan", "PhotoScanLine", "PlannedMeal", "Recipe", "RecipeIngredient", "RecipeShare",
     "RecipeStep", "RecipeUtensil", "Reservation", "ShoppingListItem", "ShoppingListItemMeal", "StorageLocation",

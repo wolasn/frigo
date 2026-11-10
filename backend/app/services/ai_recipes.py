@@ -171,7 +171,7 @@ def _client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=key, timeout=180.0, max_retries=2)
 
 
-def generate(req: GenerationRequest, client: Any | None = None) -> list[GeneratedRecipe]:
+def generate(req: GenerationRequest, client: Any | None = None, on_usage: Any | None = None) -> list[GeneratedRecipe]:
     """Appelle Claude et renvoie les recettes validées. Lève AiError avec un message en français."""
     client = client or _client()
     try:
@@ -209,6 +209,8 @@ def generate(req: GenerationRequest, client: Any | None = None) -> list[Generate
     logger.info("Génération IA : modèle %s, %s jetons en entrée, %s en sortie, requête %s",
                 response.model, response.usage.input_tokens, response.usage.output_tokens,
                 getattr(response, "_request_id", None))
+    if on_usage:  # coût enregistré même si la réponse est ensuite inutilisable : l'appel est facturé
+        on_usage(response.model, response.usage.input_tokens, response.usage.output_tokens)
     if response.stop_reason == "refusal":
         raise AiError("L'IA a refusé cette demande. Reformule ton envie et réessaie.")
     if response.stop_reason == "max_tokens":
