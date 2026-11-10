@@ -1,4 +1,4 @@
-import type { Item, RemovalReason } from "./api";
+import type { Item, RemovalReason, StorageType } from "./api";
 
 const UNIT_LABELS: Record<string, [string, string]> = {
   g: ["g", "g"],
@@ -57,5 +57,14 @@ export const REASON_LABELS: Record<RemovalReason, string> = {
   discarded: "Jeté",
   given: "Donné",
   cooked: "Cuisiné",
+  other: "Autre",
+};
+
+export const STORAGE_LABELS: Record<StorageType, string> = {
+  fridge: "Réfrigérateur",
+  freezer: "Congélateur",
+  pantry: "Placard",
+  spice_rack: "Épices",
+  fruit_bowl: "Corbeille à fruits",
   other: "Autre",
 };

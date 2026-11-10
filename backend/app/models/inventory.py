@@ -124,6 +124,32 @@ class StorageLocation(Base):
     )
 
 
+class LocationShelfLife(Base):
+    """Durée de conservation propre à un lieu (produit fermé) : remplace, pour ce lieu, la durée
+    par défaut du catalogue pour une catégorie ou un aliment."""
+
+    __tablename__ = "location_shelf_life"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    storage_location_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("storage_locations.id", ondelete="CASCADE"), nullable=False
+    )
+    food_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("foods.id", ondelete="CASCADE"))
+    category_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("food_categories.id", ondelete="CASCADE")
+    )
+    days: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("(food_id IS NULL) <> (category_id IS NULL)", name="food_xor_category"),
+        CheckConstraint("days BETWEEN 0 AND 3650", name="days_range"),
+        Index("uq_location_shelf_life_food", "storage_location_id", "food_id", unique=True,
+              postgresql_where=text("food_id IS NOT NULL")),
+        Index("uq_location_shelf_life_category", "storage_location_id", "category_id", unique=True,
+              postgresql_where=text("category_id IS NOT NULL")),
+    )
+
+
 class InventoryItem(TimestampMixin, Base):
     __tablename__ = "inventory_items"
 

@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type Alerts, type Food, type Inventory, type Item } from "../api";
 import AddItemDialog from "../components/inventory/AddItemDialog";
 import { EditDialog, HistoryDialog, RemoveDialog } from "../components/inventory/ItemDialogs";
+import LocationsDialog from "../components/inventory/LocationsDialog";
 import { ErrorMessage, inputClass, primaryButton, secondaryButton } from "../components/ui";
 import { expiryText, formatQuantity, STATUS_STYLES } from "../format";
 
-type Dialog = { type: "add" } | { type: "history" } | { type: "remove"; item: Item } | { type: "edit"; item: Item } | null;
+type Dialog = { type: "add" } | { type: "history" } | { type: "locations" } | { type: "remove"; item: Item } | { type: "edit"; item: Item } | null;
 
 export default function InventoryPage() {
   const [inventories, setInventories] = useState<Inventory[]>([]);
@@ -18,14 +19,18 @@ export default function InventoryPage() {
   const [dialog, setDialog] = useState<Dialog>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadInventories = useCallback(() => {
     api
       .inventories()
       .then((list) => {
         setInventories(list);
-        setInventoryId(list.find((i) => i.kind === "personal")?.id ?? list[0]?.id ?? null);
+        setInventoryId((current) => current ?? list.find((i) => i.kind === "personal")?.id ?? list[0]?.id ?? null);
       })
       .catch(() => setError("Impossible de charger tes inventaires."));
+  }, []);
+
+  useEffect(() => {
+    loadInventories();
     api.basics().then(setBasics).catch(() => setBasics([]));
   }, []);
 
@@ -74,7 +79,10 @@ export default function InventoryPage() {
             </select>
           )}
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <button className={secondaryButton} onClick={() => setDialog({ type: "locations" })}>
+            Lieux
+          </button>
           <button className={secondaryButton} onClick={() => setDialog({ type: "history" })}>
             Historique
           </button>
@@ -152,6 +160,18 @@ export default function InventoryPage() {
       )}
       {dialog?.type === "remove" && <RemoveDialog item={dialog.item} onDone={reload} onClose={() => setDialog(null)} />}
       {dialog?.type === "edit" && <EditDialog item={dialog.item} inventory={inventory} onDone={reload} onClose={() => setDialog(null)} />}
+      {dialog?.type === "locations" && (
+        <LocationsDialog
+          inventoryId={inventory.id}
+          inventoryName={inventory.name}
+          canEdit={inventory.role === "admin"}
+          onChanged={() => {
+            loadInventories();
+            reload();
+          }}
+          onClose={() => setDialog(null)}
+        />
+      )}
       {dialog?.type === "history" && <HistoryDialog inventory={inventory} onRestored={reload} onClose={() => setDialog(null)} />}
     </div>
   );

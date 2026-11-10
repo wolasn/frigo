@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { api, type Inventory, type InventoryDetail, type MyInvitation, type NotificationSummary, type Role, type StorageType } from "../api";
+import { api, type Inventory, type InventoryDetail, type MyInvitation, type NotificationSummary, type Role } from "../api";
 import { ErrorMessage, inputClass, primaryButton, secondaryButton } from "../components/ui";
 
 const ROLE_LABELS: Record<Role, string> = { admin: "Administrateur", contributor: "Contributeur", member: "Membre" };
@@ -7,14 +7,6 @@ const ROLE_HELP: Record<Role, string> = {
   admin: "tout, y compris gérer les membres et supprimer le partage",
   contributor: "en plus : planifier et modifier les repas de l'agenda partagé",
   member: "voir, ajouter et retirer des aliments, cocher les repas cuisinés et les achats",
-};
-const STORAGE_LABELS: Record<StorageType, string> = {
-  fridge: "Frigo",
-  freezer: "Congélateur",
-  pantry: "Placard",
-  spice_rack: "Épices",
-  fruit_bowl: "Corbeille à fruits",
-  other: "Autre",
 };
 
 export default function SharingPage({ onChanged }: { onChanged: () => void }) {
@@ -148,8 +140,6 @@ function InventoryPanel({
 }) {
   const [detail, setDetail] = useState<InventoryDetail | null>(null);
   const [username, setUsername] = useState("");
-  const [locationName, setLocationName] = useState("");
-  const [locationType, setLocationType] = useState<StorageType>("pantry");
   const [name, setName] = useState(inventory.name);
   const shared = inventory.kind === "shared";
   const isAdmin = !shared || detail?.my_role === "admin";
@@ -264,42 +254,9 @@ function InventoryPanel({
         </>
       )}
 
-      <div>
-        <h3 className="mb-2 font-medium">Lieux de rangement</h3>
-        <div className="flex flex-wrap gap-1.5">
-          {inventory.locations.map((l) => (
-            <span key={l.id} className="inline-flex items-center gap-1 rounded-full bg-stone-100 px-3 py-1 text-sm dark:bg-stone-800">
-              {l.name}
-              {isAdmin && (
-                <button aria-label={`Supprimer ${l.name}`} className="text-stone-400 hover:text-red-600" onClick={() => act(() => api.deleteLocation(inventory.id, l.id))}>
-                  ×
-                </button>
-              )}
-            </span>
-          ))}
-        </div>
-        {isAdmin && (
-          <form
-            className="mt-2 flex max-w-lg flex-wrap gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              act(() => api.addLocation(inventory.id, locationName.trim(), locationType)).then(() => setLocationName(""));
-            }}
-          >
-            <input className={inputClass + " flex-1"} placeholder="Nouveau lieu (ex. Cave)" value={locationName} onChange={(e) => setLocationName(e.target.value)} maxLength={40} />
-            <select className={inputClass + " w-auto"} value={locationType} onChange={(e) => setLocationType(e.target.value as StorageType)} aria-label="Type de lieu">
-              {Object.entries(STORAGE_LABELS).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-            <button className={secondaryButton} disabled={!locationName.trim()}>
-              Ajouter
-            </button>
-          </form>
-        )}
-      </div>
+      <p className="text-sm text-stone-500">
+        Lieux de rangement : {inventory.locations.map((l) => l.name).join(", ")}. Ils se gèrent depuis la page Inventaire.
+      </p>
 
       {shared && me && (
         <div className="flex flex-wrap gap-2 border-t border-stone-200 pt-4 dark:border-stone-800">

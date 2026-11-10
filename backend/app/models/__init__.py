@@ -9,6 +9,7 @@ from app.models.inventory import (
     InventoryItem,
     InventoryMember,
     InventoryRemoval,
+    LocationShelfLife,
     StorageLocation,
 )
 from app.models.photo import PhotoScan, PhotoScanLine
@@ -27,7 +28,7 @@ from app.models.recipes import (
 
 __all__ = [
     "AppSetting", "AuthSession", "Base", "Food", "FoodAlias", "FoodCategory", "FoodShelfLife", "Inventory",
-    "InventoryInvitation", "InventoryItem", "InventoryMember", "InventoryRemoval", "MarmitonSearchCache",
+    "InventoryInvitation", "InventoryItem", "InventoryMember", "InventoryRemoval", "LocationShelfLife", "MarmitonSearchCache",
     "Notification", "PhotoScan", "PhotoScanLine", "PlannedMeal", "Recipe", "RecipeIngredient", "RecipeShare",
     "RecipeStep", "RecipeUtensil", "Reservation", "ShoppingListItem", "ShoppingListItemMeal", "StorageLocation",
     "UnitConversion", "User", "UserCategoryThreshold", "UserExcludedFood", "UserInfiniteFood", "UserPreferences",

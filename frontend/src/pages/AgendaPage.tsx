@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, type Meal, type MealDraft, type MealSlot } from "../api";
+import { api, type Inventory, type Meal, type MealDraft, type MealSlot } from "../api";
 import MealDialog, { formatDay, MoveWarningDialog, moveWithCheck } from "../components/agenda/MealDialog";
 import { SLOT_LABELS, SLOTS } from "../components/agenda/PlanDialog";
 import WeekBalancePanel, { useWeekBalance } from "../components/agenda/WeekBalancePanel";
@@ -41,6 +41,7 @@ export default function AgendaPage() {
   const [confirmation, setConfirmation] = useState<Confirmation>(null);
   const [agendaFilter, setAgendaFilter] = useState<string>("all");
   const [highlightKey, setHighlight] = useState<string | null>(null);
+  const [sharedInventories, setSharedInventories] = useState<Inventory[]>([]);
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [suggesting, setSuggesting] = useState(false);
   const [busySlot, setBusySlot] = useState<string | null>(null);
@@ -56,16 +57,27 @@ export default function AgendaPage() {
   }, [days]);
   useEffect(load, [load]);
 
+  useEffect(() => {
+    api
+      .inventories()
+      .then((list) => setSharedInventories(list.filter((i) => i.kind === "shared")))
+      .catch(() => setSharedInventories([]));
+  }, []);
+
   const askConfirmation = useCallback(
     (warnings: string[]) => new Promise<boolean>((resolve) => setConfirmation({ warnings, resolve })),
     [],
   );
 
+  // Tous les agendas : le personnel et celui de chaque inventaire partagé, même sans repas cette semaine.
   const agendas = useMemo(() => {
-    const map = new Map<string, string>();
+    const map = new Map<string, string>([["personal", "Personnel"]]);
+    sharedInventories.forEach((i) => map.set(i.id, i.name));
     (meals ?? []).forEach((m) => map.set(m.agenda_id ?? "personal", m.agenda_name));
     return [...map.entries()];
-  }, [meals]);
+  }, [meals, sharedInventories]);
+  const canPlan = (agendaId: string) =>
+    agendaId === "personal" || sharedInventories.some((i) => i.id === agendaId && i.role !== "member");
   const colorOf = (meal: Meal) =>
     meal.agenda_id ? AGENDA_COLORS[Math.max(0, agendas.findIndex(([id]) => id === meal.agenda_id)) % AGENDA_COLORS.length] : "border-l-brand-500";
 
@@ -169,7 +181,7 @@ export default function AgendaPage() {
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">Agenda</h1>
         <div className="flex flex-wrap items-center gap-2">
-          <button className={primaryButton + " px-3 py-1.5 text-sm"} onClick={() => setSuggesting(true)}>
+          <button className={primaryButton + " px-3 py-1.5 text-sm"} onClick={() => setSuggesting(true)} disabled={!canPlan(target)} title={canPlan(target) ? undefined : "Seuls les contributeurs et administrateurs planifient dans cet agenda"}>
             Proposer des repas
           </button>
           <button className={secondaryButton + " px-3 py-1.5"} onClick={() => setWeekStart(addDays(weekStart, -7))} aria-label="Semaine précédente">
@@ -287,7 +299,7 @@ export default function AgendaPage() {
                     >
                       <p className="flex items-center justify-between px-1 text-[11px] uppercase tracking-wide text-stone-400">
                         {SLOT_LABELS[slot]}
-                        {!past && slotMeals.length === 0 && slotDrafts.length === 0 && (
+                        {!past && canPlan(target) && slotMeals.length === 0 && slotDrafts.length === 0 && (
                           <button
                             className="rounded px-1 text-sm leading-none text-stone-400 hover:bg-stone-200 hover:text-stone-700 dark:hover:bg-stone-800"
                             title="Proposer un repas pour ce créneau"

@@ -11,6 +11,11 @@ export type StorageType = "fridge" | "freezer" | "pantry" | "spice_rack" | "frui
 
 export type Location = { id: string; name: string; storage_type: StorageType; position: number };
 
+export type ManagedLocation = Location & { item_count: number };
+
+export type ShelfLifeRow = { id: string; name: string; default_days: number | null; days: number | null };
+export type LocationShelfLife = { location: ManagedLocation; categories: ShelfLifeRow[]; foods: ShelfLifeRow[] };
+
 export type Inventory = {
   id: string;
   name: string;
@@ -206,6 +211,8 @@ export type ShoppingLine = {
   is_perishable: boolean;
   expiry_risk: boolean;
   meals: { title: string; meal_date: string }[];
+  default_location_id: string | null;
+  freeze_from: string | null;
 };
 
 export type ShoppingList = { id: string; name: string; inventory_id: string; lines: ShoppingLine[] };
@@ -392,9 +399,17 @@ export const api = {
   myInvitations: () => request<MyInvitation[]>("GET", "/api/invitations"),
   acceptInvitation: (id: string) => request<InventoryDetail>("POST", `/api/invitations/${id}/accept`),
   declineInvitation: (id: string) => request<void>("POST", `/api/invitations/${id}/decline`),
-  addLocation: (id: string, name: string, storage_type: StorageType) =>
-    request<Location>("POST", `/api/inventories/${id}/locations`, { name, storage_type }),
-  deleteLocation: (id: string, locationId: string) => request<void>("DELETE", `/api/inventories/${id}/locations/${locationId}`),
+  locations: (inventoryId: string) => request<ManagedLocation[]>("GET", `/api/inventories/${inventoryId}/locations`),
+  addLocation: (inventoryId: string, name: string, storage_type: StorageType) =>
+    request<ManagedLocation>("POST", `/api/inventories/${inventoryId}/locations`, { name, storage_type }),
+  updateLocation: (id: string, body: { name?: string; storage_type?: StorageType }) =>
+    request<ManagedLocation>("PATCH", `/api/locations/${id}`, body),
+  reorderLocations: (inventoryId: string, ids: string[]) =>
+    request<ManagedLocation[]>("POST", `/api/inventories/${inventoryId}/locations/order`, { ids }),
+  deleteLocation: (id: string) => request<void>("DELETE", `/api/locations/${id}`),
+  locationShelfLife: (id: string) => request<LocationShelfLife>("GET", `/api/locations/${id}/shelf-life`),
+  setShelfLife: (id: string, kind: "categories" | "foods", targetId: string, days: number | null) =>
+    request<LocationShelfLife>(days === null ? "DELETE" : "PUT", `/api/locations/${id}/shelf-life/${kind}/${targetId}`, days === null ? undefined : { days }),
   notifications: () => request<NotificationSummary>("GET", "/api/notifications"),
   readNotifications: () => request<void>("POST", "/api/notifications/read-all"),
 

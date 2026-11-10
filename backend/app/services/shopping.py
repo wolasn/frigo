@@ -19,6 +19,7 @@ from app.clock import today
 from app.models import (
     Food,
     FoodShelfLife,
+    Inventory,
     InventoryItem,
     InventoryMember,
     PlannedMeal,
@@ -26,10 +27,12 @@ from app.models import (
     RecipeIngredient,
     ShoppingListItem,
     ShoppingListItemMeal,
+    StorageLocation,
     User,
 )
 from app.models.enums import ItemKind, MealStatus, ReferenceUnit, ShoppingOrigin, StorageType
 from app.services.ingredients import parse_ingredient
+from app.services.inventory import closed_shelf_life
 from app.services.planning import compute
 
 PERISHABLE_DAYS = 3
@@ -51,6 +54,42 @@ def shelf_life(session: Session, food: Food) -> tuple[StorageType, int | None]:
             if storage in rows:
                 return storage, rows[storage]
     return StorageType.PANTRY, None
+
+
+def target_inventory_id(session: Session, user: User, shared_inventory_id: uuid.UUID | None) -> uuid.UUID:
+    """Inventaire qui reçoit les achats de la liste."""
+    if shared_inventory_id:
+        return shared_inventory_id
+    return session.scalar(select(Inventory.id).where(Inventory.personal_owner_id == user.id))
+
+
+def _locations(session: Session, inventory_id: uuid.UUID) -> list[StorageLocation]:
+    return list(session.scalars(
+        select(StorageLocation).where(StorageLocation.inventory_id == inventory_id)
+        .order_by(StorageLocation.position, StorageLocation.name)
+    ))
+
+
+def default_location(session: Session, inventory_id: uuid.UUID, food: Food) -> StorageLocation | None:
+    """Lieu habituel du produit dans cet inventaire : le premier lieu du type où on le range (hors congélateur)."""
+    storage, _ = shelf_life(session, food)
+    locations = _locations(session, inventory_id)
+    return next((l for l in locations if l.storage_type == storage), locations[0] if locations else None)
+
+
+def freezer_location(session: Session, inventory_id: uuid.UUID) -> StorageLocation | None:
+    return next((l for l in _locations(session, inventory_id) if l.storage_type == StorageType.FREEZER), None)
+
+
+def freeze_from(session: Session, inventory_id: uuid.UUID, food: Food, first_meal: date, latest: date | None) -> date | None:
+    """Achat le plus tôt possible en congelant : le repas moins la durée au congélateur, jamais avant
+    aujourd'hui. Vide sans congélateur, sans durée connue, ou si ça n'avance pas la date conseillée."""
+    freezer = freezer_location(session, inventory_id)
+    days = closed_shelf_life(session, food, freezer) if freezer else None
+    if not days:
+        return None
+    earliest = max(today(), first_meal - timedelta(days=days))
+    return earliest if latest is None or earliest < latest else None
 
 
 @dataclass
@@ -107,11 +146,15 @@ def _needs(session: Session, user: User, meals: list[PlannedMeal], shared_invent
     needs: list[_Need] = []
     foods: dict[uuid.UUID, Food] = {}
     lives: dict[uuid.UUID, int | None] = {}
+    inventory_id = target_inventory_id(session, user, shared_inventory_id)
 
     def food_info(food_id):
         if food_id not in foods:
             foods[food_id] = session.get(Food, food_id)
-            lives[food_id] = shelf_life(session, foods[food_id])[1]
+            location = default_location(session, inventory_id, foods[food_id])
+            # Durée dans le lieu habituel de cet inventaire, réglages du lieu compris.
+            lives[food_id] = (closed_shelf_life(session, foods[food_id], location) if location
+                              else shelf_life(session, foods[food_id])[1])
         return foods[food_id], lives[food_id]
 
     for meal in meals:

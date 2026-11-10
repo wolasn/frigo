@@ -12,6 +12,7 @@ from app.models import (
     FoodShelfLife,
     InventoryItem,
     InventoryMember,
+    LocationShelfLife,
     StorageLocation,
     User,
     UserCategoryThreshold,
@@ -47,13 +48,26 @@ def require_location(session: Session, inventory_id: uuid.UUID, location_id: uui
     return location
 
 
-def _shelf_life_days(session: Session, food: Food, storage: StorageType, opened: bool) -> int | None:
-    """Cherche la durée de l'aliment, puis celle de sa catégorie ; ouvert d'abord si le produit l'est."""
-    for column, value in ((FoodShelfLife.food_id, food.id), (FoodShelfLife.category_id, food.category_id)):
+def _shelf_life_days(
+    session: Session, food: Food, storage: StorageType, opened: bool, location_id: uuid.UUID | None = None
+) -> int | None:
+    """Cherche la durée de l'aliment, puis celle de sa catégorie ; ouvert d'abord si le produit l'est.
+    Pour un produit fermé, une durée réglée pour le lieu remplace celle du catalogue au même niveau
+    (aliment, puis catégorie)."""
+    levels = (
+        (FoodShelfLife.food_id, LocationShelfLife.food_id, food.id),
+        (FoodShelfLife.category_id, LocationShelfLife.category_id, food.category_id),
+    )
+    for catalogue_column, location_column, value in levels:
+        if location_id is not None and not opened and value is not None:
+            days = session.scalar(select(LocationShelfLife.days).where(
+                LocationShelfLife.storage_location_id == location_id, location_column == value))
+            if days is not None:
+                return days
         for is_opened in ((True, False) if opened else (False,)):
             days = session.scalar(
                 select(FoodShelfLife.days).where(
-                    column == value, FoodShelfLife.storage_type == storage, FoodShelfLife.is_opened == is_opened
+                    catalogue_column == value, FoodShelfLife.storage_type == storage, FoodShelfLife.is_opened == is_opened
                 )
             )
             if days is not None:
@@ -61,14 +75,21 @@ def _shelf_life_days(session: Session, food: Food, storage: StorageType, opened:
     return None
 
 
+def closed_shelf_life(session: Session, food: Food, location: StorageLocation) -> int | None:
+    """Durée de conservation d'un produit fermé rangé dans ce lieu (réglage du lieu, sinon catalogue)."""
+    return _shelf_life_days(session, food, location.storage_type, opened=False, location_id=location.id)
+
+
 def estimate_expiry(
-    session: Session, food: Food | None, storage: StorageType, entered_on: date, opened_on: date | None
+    session: Session, food: Food | None, storage: StorageType, entered_on: date, opened_on: date | None,
+    location_id: uuid.UUID | None = None,
 ) -> date:
-    """Suppose l'article acheté le jour de son entrée ; un produit ouvert peut raccourcir la date."""
+    """Suppose l'article acheté le jour de son entrée ; un produit ouvert peut raccourcir la date.
+    `location_id` : tient compte des durées réglées pour ce lieu."""
     if food is None:  # reste ou plat préparé
         return entered_on + timedelta(days=LEFTOVER_DAYS.get(storage, LEFTOVER_FALLBACK_DAYS))
 
-    closed_days = _shelf_life_days(session, food, storage, opened=False)
+    closed_days = _shelf_life_days(session, food, storage, opened=False, location_id=location_id)
     expiry = entered_on + timedelta(days=closed_days if closed_days is not None else FALLBACK_DAYS)
     if opened_on is not None:
         opened_days = _shelf_life_days(session, food, storage, opened=True)

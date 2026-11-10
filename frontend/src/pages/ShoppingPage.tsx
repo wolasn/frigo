@@ -6,6 +6,11 @@ import { formatDate, formatQuantity, isoToday } from "../format";
 function recommendation(line: ShoppingLine): { text: string; style: string } | null {
   if (!line.recommended_purchase_on) return null;
   const when = line.recommended_purchase_on <= isoToday() ? "aujourd'hui" : `le ${formatDate(line.recommended_purchase_on)}`;
+  if (line.expiry_risk && line.freeze_from) {
+    const from = line.freeze_from <= isoToday() ? "dès aujourd'hui" : `au plus tôt le ${formatDate(line.freeze_from)}`;
+    const before = line.recommended_purchase_on <= isoToday() ? "aujourd'hui" : `avant le ${formatDate(line.recommended_purchase_on)}`;
+    return { text: `À acheter ${before}, ou ${from} et congeler`, style: "text-amber-700 dark:text-amber-400" };
+  }
   return line.expiry_risk
     ? { text: `À acheter ${when} (pas avant : périmerait avant le repas)`, style: "text-amber-700 dark:text-amber-400" }
     : { text: `À acheter ${when}`, style: "text-stone-600 dark:text-stone-400" };
@@ -203,7 +208,7 @@ function PurchaseDialog({
   onDone: (added: number) => void;
 }) {
   const [drafts, setDrafts] = useState<Record<string, Draft>>(() =>
-    Object.fromEntries(lines.map((l) => [l.id, { quantity: l.quantity !== null ? String(l.quantity).replace(".", ",") : "", expiresOn: "", locationId: "" }])),
+    Object.fromEntries(lines.map((l) => [l.id, { quantity: l.quantity !== null ? String(l.quantity).replace(".", ",") : "", expiresOn: "", locationId: l.default_location_id ?? "" }])),
   );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -255,7 +260,6 @@ function PurchaseDialog({
                 </Field>
                 <Field label="Rangé dans">
                   <select className={inputClass} value={drafts[line.id].locationId} onChange={(e) => set(line.id, { locationId: e.target.value })}>
-                    <option value="">Automatique</option>
                     {inventory?.locations.map((l) => (
                       <option key={l.id} value={l.id}>
                         {l.name}

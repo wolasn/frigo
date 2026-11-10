@@ -146,7 +146,7 @@ def test_lieux_personnalises(client, coloc):
     assert client.post(f"/api/inventories/{coloc}/locations", json={"name": "cave", "storage_type": "pantry"}).status_code == 409
     inventory = next(i for i in client.get("/api/inventories").json() if i["id"] == coloc)
     cave = next(l["id"] for l in inventory["locations"] if l["name"] == "Cave")
-    assert client.delete(f"/api/inventories/{coloc}/locations/{cave}").status_code == 204
+    assert client.delete(f"/api/locations/{cave}").status_code == 204
 
 
 def test_suppression_du_partage(client, as_user, coloc):

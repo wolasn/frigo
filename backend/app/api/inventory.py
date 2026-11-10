@@ -301,7 +301,7 @@ def add_item(inventory_id: uuid.UUID, body: ItemCreate, session: DbSession, user
     if body.expires_on is not None:
         expires_on, date_type = body.expires_on, DateType(body.date_type or "use_by")
     else:
-        expires_on = estimate_expiry(session, food, location.storage_type, entered_on, body.opened_on)
+        expires_on = estimate_expiry(session, food, location.storage_type, entered_on, body.opened_on, location.id)
         date_type = DateType.ESTIMATED
 
     item = InventoryItem(
@@ -351,7 +351,7 @@ def update_item(item_id: uuid.UUID, body: ItemUpdate, session: DbSession, user: 
         item.date_type = DateType(body.date_type or "use_by")
     elif item.date_type == DateType.ESTIMATED and changed & {"storage_location_id", "opened_on", "entered_on"}:
         storage = session.get(StorageLocation, item.storage_location_id).storage_type
-        item.expires_on = estimate_expiry(session, food, storage, item.entered_on, item.opened_on)
+        item.expires_on = estimate_expiry(session, food, storage, item.entered_on, item.opened_on, item.storage_location_id)
     elif "date_type" in changed and body.date_type and item.date_type != DateType.ESTIMATED:
         item.date_type = DateType(body.date_type)
 

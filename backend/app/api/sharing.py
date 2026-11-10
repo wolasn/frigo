@@ -24,7 +24,7 @@ from app.models import (
     StorageLocation,
     User,
 )
-from app.models.enums import InventoryKind, InvitationStatus, MemberRole, NotificationType, StorageType
+from app.models.enums import InventoryKind, InvitationStatus, MemberRole, NotificationType
 from app.services.accounts import DEFAULT_STORAGE_LOCATIONS, find_user_by_username
 from app.services.planning import recompute_reservations
 
@@ -84,18 +84,6 @@ class MyInvitation(BaseModel):
     inventory_name: str
     invited_by: str | None
     created_at: datetime
-
-
-class LocationIn(BaseModel):
-    name: str = Field(min_length=1, max_length=40)
-    storage_type: StorageType
-
-
-class LocationOut(BaseModel):
-    id: uuid.UUID
-    name: str
-    storage_type: StorageType
-    position: int
 
 
 # ---------- Outils ----------
@@ -332,41 +320,4 @@ def accept_invitation(invitation_id: uuid.UUID, session: DbSession, user: Curren
 def decline_invitation(invitation_id: uuid.UUID, session: DbSession, user: CurrentUser) -> None:
     invitation = _my_pending_invitation(session, user, invitation_id)
     invitation.status, invitation.answered_at = InvitationStatus.DECLINED, datetime.now(UTC)
-    session.commit()
-
-
-# ---------- Lieux de rangement ----------
-
-
-@router.post("/inventories/{inventory_id}/locations", status_code=status.HTTP_201_CREATED)
-def add_location(inventory_id: uuid.UUID, body: LocationIn, session: DbSession, user: CurrentUser) -> LocationOut:
-    inventory, member = _membership(session, user, inventory_id)
-    if inventory.kind == InventoryKind.SHARED and member.role != MemberRole.ADMIN:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Réservé aux administrateurs de cet inventaire.")
-    name = body.name.strip()
-    if session.scalar(select(StorageLocation.id).where(
-        StorageLocation.inventory_id == inventory_id, func.lower(StorageLocation.name) == name.lower()
-    )):
-        raise HTTPException(status.HTTP_409_CONFLICT, detail=f"Le lieu « {name} » existe déjà.")
-    position = (session.scalar(
-        select(func.max(StorageLocation.position)).where(StorageLocation.inventory_id == inventory_id)
-    ) or 0) + 1
-    location = StorageLocation(inventory_id=inventory_id, name=name, storage_type=body.storage_type, position=position)
-    session.add(location)
-    session.commit()
-    return LocationOut(id=location.id, name=location.name, storage_type=location.storage_type, position=position)
-
-
-@router.delete("/inventories/{inventory_id}/locations/{location_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_location(inventory_id: uuid.UUID, location_id: uuid.UUID, session: DbSession, user: CurrentUser) -> None:
-    inventory, member = _membership(session, user, inventory_id)
-    if inventory.kind == InventoryKind.SHARED and member.role != MemberRole.ADMIN:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Réservé aux administrateurs de cet inventaire.")
-    location = session.get(StorageLocation, location_id)
-    if location is None or location.inventory_id != inventory_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Lieu introuvable.")
-    used = session.scalar(select(func.count()).select_from(InventoryItem).where(InventoryItem.storage_location_id == location_id))
-    if used:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail="Ce lieu contient encore des articles (ou leur historique).")
-    session.delete(location)
     session.commit()

@@ -24,7 +24,7 @@ from app.models import (
 from app.models.enums import DateType, InventoryKind, ItemKind, ItemUnit, ShoppingOrigin
 from app.services.inventory import estimate_expiry
 from app.services.planning import recompute_reservations
-from app.services.shopping import meal_titles, regenerate, shelf_life
+from app.services.shopping import default_location, freeze_from, meal_titles, regenerate, target_inventory_id
 from app.services.units import UnitError, normalize_unit, to_reference
 
 router = APIRouter(prefix="/api/shopping", tags=["courses"])
@@ -49,6 +49,8 @@ class LineOut(BaseModel):
     is_perishable: bool
     expiry_risk: bool
     meals: list[MealRef]
+    default_location_id: uuid.UUID | None = None  # lieu présélectionné à l'achat
+    freeze_from: date | None = None  # « ou au plus tôt ce jour-là, et congeler »
 
 
 class ShoppingListOut(BaseModel):
@@ -108,16 +110,22 @@ def _lines(session: Session, user: User, shared_inventory_id: uuid.UUID | None) 
         .where(scope, ShoppingListItem.purchased_at.is_(None))
     ).all()
     titles = meal_titles(session, [item.id for item, _ in rows])
-    lines = [
-        LineOut(
+    inventory_id = target_inventory_id(session, user, shared_inventory_id)
+    lines = []
+    for item, aisle in rows:
+        meals = titles.get(item.id, [])
+        food = session.get(Food, item.food_id) if item.food_id else None
+        location = default_location(session, inventory_id, food) if food else None
+        freeze = (freeze_from(session, inventory_id, food, min(d for _, d in meals), item.recommended_purchase_on)
+                  if food and item.expiry_risk and meals else None)
+        lines.append(LineOut(
             id=item.id, origin=item.origin, food_id=item.food_id, label=item.label,
             quantity=float(item.quantity) if item.quantity is not None else None, unit=item.unit,
             aisle=aisle or OTHER_AISLE, recommended_purchase_on=item.recommended_purchase_on,
             is_perishable=item.is_perishable, expiry_risk=item.expiry_risk,
-            meals=[MealRef(title=t, meal_date=d) for t, d in titles.get(item.id, [])],
-        )
-        for item, aisle in rows
-    ]
+            meals=[MealRef(title=t, meal_date=d) for t, d in meals],
+            default_location_id=location.id if location else None, freeze_from=freeze,
+        ))
     lines.sort(key=lambda l: (l.aisle == OTHER_AISLE, l.aisle, l.label.lower()))
     return lines
 
@@ -195,7 +203,7 @@ def purchase(body: PurchaseIn, session: DbSession, user: CurrentUser) -> Purchas
                 quantity_ref = to_reference(session, food, Decimal(quantity), unit)
             except UnitError as error:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from None
-            expires_on = line.expires_on or estimate_expiry(session, food, location.storage_type, today(), None)
+            expires_on = line.expires_on or estimate_expiry(session, food, location.storage_type, today(), None, location.id)
             session.add(InventoryItem(
                 inventory_id=inventory_id, kind=ItemKind.INGREDIENT, food_id=food.id, quantity=quantity_ref,
                 unit=ItemUnit(food.reference_unit.value), entered_unit=unit, storage_location_id=location.id,
@@ -217,8 +225,4 @@ def _location(session: Session, inventory_id: uuid.UUID, food: Food, wanted: uui
         if location is None or location.inventory_id != inventory_id:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Ce lieu n'appartient pas à l'inventaire.")
         return location
-    storage, _ = shelf_life(session, food)
-    locations = list(session.scalars(
-        select(StorageLocation).where(StorageLocation.inventory_id == inventory_id).order_by(StorageLocation.position)
-    ))
-    return next((l for l in locations if l.storage_type == storage), locations[0])
+    return default_location(session, inventory_id, food)
