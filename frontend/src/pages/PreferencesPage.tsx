@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { api, type AdminSettings, type AiUsage, type Category, type UsageCall, type UserUsage, type Food, type Preferences, type User } from "../api";
 import { ErrorMessage, Field, inputClass, primaryButton, secondaryButton, Loading } from "../components/ui";
 import CategorySelect from "../components/inventory/CategorySelect";
@@ -18,6 +18,22 @@ function FoodSearch({ placeholder, onPick }: { placeholder: string; onPick: (foo
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("");
   const [results, setResults] = useState<Food[]>([]);
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+
+  // La liste se ferme au clic en dehors de la recherche (ou avec Échap), comme une liste déroulante.
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent | KeyboardEvent) => {
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !box.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!query.trim() && !category) return setResults([]);
@@ -26,12 +42,27 @@ function FoodSearch({ placeholder, onPick }: { placeholder: string; onPick: (foo
   }, [query, category]);
 
   return (
-    <div className="relative max-w-xl">
+    <div ref={box} className="relative max-w-xl">
       <div className="flex flex-col gap-2 sm:flex-row">
-        <input className={inputClass} placeholder={placeholder} value={query} onChange={(e) => setQuery(e.target.value)} />
-        <CategorySelect value={category} onChange={setCategory} />
+        <input
+          className={inputClass}
+          placeholder={placeholder}
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+        />
+        <CategorySelect
+          value={category}
+          onChange={(id) => {
+            setCategory(id);
+            setOpen(true);
+          }}
+        />
       </div>
-      {results.length > 0 && (
+      {open && results.length > 0 && (
         <ul className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-stone-200 bg-white shadow-lg dark:border-stone-700 dark:bg-stone-900">
           {results.map((food) => (
             <li key={food.id}>
@@ -41,6 +72,7 @@ function FoodSearch({ placeholder, onPick }: { placeholder: string; onPick: (foo
                 onClick={() => {
                   onPick(food);
                   setQuery("");
+                  setOpen(false);
                 }}
               >
                 {food.name} <span className="text-xs text-stone-500">{food.category_name}</span>
