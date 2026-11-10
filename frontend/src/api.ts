@@ -384,8 +384,14 @@ function errorMessage(status: number, data: unknown): string {
 export const api = {
   me: () => request<User>("GET", "/api/auth/me"),
   login: (username: string, password: string) => request<User>("POST", "/api/auth/login", { username, password }),
-  register: (username: string, display_name: string, password: string) =>
-    request<User>("POST", "/api/auth/register", { username, display_name, password }),
+  register: (username: string, display_name: string, password: string, invitation?: string) =>
+    request<User>("POST", "/api/auth/register", { username, display_name, password, invitation }),
+  checkSignupInvitation: (code: string) =>
+    request<{ valid: boolean; required: boolean; expires_at: string | null }>(
+      "GET",
+      `/api/auth/invitations/check?code=${encodeURIComponent(code)}`,
+    ),
+  createSignupInvitation: () => request<{ code: string; expires_at: string }>("POST", "/api/auth/invitations"),
   logout: () => request<void>("POST", "/api/auth/logout"),
 
   inventories: () => request<Inventory[]>("GET", "/api/inventories"),
@@ -397,6 +403,7 @@ export const api = {
   removals: (inventoryId: string) => request<Removal[]>("GET", `/api/inventories/${inventoryId}/removals`),
   restore: (removalId: string) => request<Item>("POST", `/api/removals/${removalId}/restore`),
 
+  warmUpPhotoModel: () => request<{ engine: "claude" | "local"; warming: boolean }>("POST", "/api/photo-scans/warm-up"),
   analyzePhotos: (photos: { media_type: string; data: string }[], inventory_id?: string) =>
     request<PhotoScan>("POST", "/api/photo-scans", { photos, inventory_id }),
   validateScan: (id: string, lines: ScanLineEdit[]) =>

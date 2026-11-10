@@ -5,6 +5,7 @@ import tempfile
 
 # Avant d'importer l'application : pas de tâches planifiées, état de surveillance dans un dossier jetable.
 os.environ["SCHEDULER_ENABLED"] = "false"
+os.environ.setdefault("SIGNUP_INVITE_REQUIRED", "false")  # activé dans test_invitations.py
 os.environ.setdefault("STATE_DIR", tempfile.mkdtemp(prefix="frigo-state-"))
 
 import pytest  # noqa: E402

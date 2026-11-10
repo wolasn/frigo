@@ -32,6 +32,15 @@ git archive --format=tar HEAD | ssh <utilisateur>@<ip-du-serveur> "cd /opt/frigo
 ssh <utilisateur>@<ip-du-serveur> "cd /opt/frigo && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build && docker image prune -f"
 ```
 
+## Inscription sur invitation
+
+L'appli est privée : on ne crée un compte qu'avec un lien d'invitation, créé par n'importe quel membre
+depuis la page Partages (« Inviter quelqu'un sur l'appli »). Un lien sert une seule fois et expire au bout
+de 10 minutes ; seule son empreinte est gardée en base. Seul le tout premier compte (base vide) s'inscrit
+sans lien. Les tests désactivent cette règle (`SIGNUP_INVITE_REQUIRED=false`) sauf `test_invitations.py`.
+Pour tester l'appli sur le PC sans lancer les tâches planifiées en double avec le serveur :
+`docker compose run -d --name frigo-test --service-ports -e SCHEDULER_ENABLED=false app`.
+
 ## Super-administrateur
 
 Créer d'abord son compte depuis l'application, puis :
@@ -94,6 +103,8 @@ ollama pull qwen2.5vl:7b
 ```
 
   L'application joint Ollama sur `http://host.docker.internal:11434` (modifiable dans le réglage).
+- Préchauffage : avec le modèle local, ouvrir la fenêtre « 📷 Photo » demande à Ollama de charger le
+  modèle (environ 30 s), pendant qu'on prend les photos ; il reste chargé 15 min après le dernier usage.
 - Repli : si le modèle local ne répond pas (PC éteint, en veille, hors réseau, modèle absent), l'analyse
   passe par l'API Claude, et l'écran d'analyse l'indique. Délai de connexion : 5 s. Le repli se coupe
   dans le même réglage.

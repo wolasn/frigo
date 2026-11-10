@@ -130,3 +130,20 @@ class AiUsage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
 
     __table_args__ = (CheckConstraint("kind IN ('recipe', 'photo')", name="kind_known"),)
+
+
+class SignupInvitation(Base):
+    """Lien d'inscription : créé par un membre, utilisable une seule fois, valable quelques minutes.
+    Seule l'empreinte du code est gardée ; le code lui-même n'existe que dans le lien."""
+
+    __tablename__ = "signup_invitations"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    used_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))

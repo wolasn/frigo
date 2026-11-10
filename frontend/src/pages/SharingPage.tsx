@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, type Inventory, type InventoryDetail, type MyInvitation, type NotificationSummary, type Role } from "../api";
 import { ErrorMessage, inputClass, primaryButton, secondaryButton, Loading } from "../components/ui";
+import SignupLink from "../components/SignupLink";
 
 const ROLE_LABELS: Record<Role, string> = { admin: "Administrateur", contributor: "Contributeur", member: "Membre" };
 const ROLE_HELP: Record<Role, string> = {
@@ -125,6 +126,8 @@ export default function SharingPage({ onChanged }: { onChanged: () => void }) {
           </ul>
         </section>
       )}
+
+      <SignupLink />
     </div>
   );
 }

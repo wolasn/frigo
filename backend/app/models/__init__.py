@@ -4,6 +4,7 @@ from app.models.accounts import (
     AiUsage,
     AppSetting,
     AuthSession,
+    SignupInvitation,
     User,
     UserCategoryThreshold,
     UserExcludedFood,
@@ -38,7 +39,7 @@ __all__ = [
     "AiUsage", "AppSetting", "AuthSession", "Base", "Food", "FoodAlias", "FoodCategory", "FoodShelfLife", "Inventory",
     "InventoryInvitation", "InventoryItem", "InventoryMember", "InventoryRemoval", "LocationShelfLife", "MarmitonSearchCache",
     "Notification", "PhotoScan", "PhotoScanLine", "PlannedMeal", "Recipe", "RecipeIngredient", "RecipeShare",
-    "RecipeStep", "RecipeUtensil", "Reservation", "ShoppingListItem", "ShoppingListItemMeal", "StorageLocation",
+    "RecipeStep", "RecipeUtensil", "Reservation", "ShoppingListItem", "SignupInvitation", "ShoppingListItemMeal", "StorageLocation",
     "UnitConversion", "User", "UserCategoryThreshold", "UserExcludedFood", "UserInfiniteFood", "UserPreferences",
     "UserRecipeMeta", "UserUtensil", "Utensil",
 ]

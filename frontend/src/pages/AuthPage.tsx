@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { api, type User } from "../api";
 
 type Mode = "login" | "register";
@@ -7,13 +7,25 @@ const inputClass =
   "w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-base outline-none focus:border-brand-500 " +
   "focus:ring-2 focus:ring-brand-100 dark:border-stone-700 dark:bg-stone-900 dark:focus:ring-brand-700";
 
+// Code du lien d'inscription (https://…/?invitation=…)
+const invitationCode = new URLSearchParams(window.location.search).get("invitation") ?? "";
+
 export default function AuthPage({ onAuthenticated }: { onAuthenticated: (user: User) => void }) {
-  const [mode, setMode] = useState<Mode>("login");
+  const [mode, setMode] = useState<Mode>(invitationCode ? "register" : "login");
+  // null : vérification en cours ; true : inscription possible
+  const [canRegister, setCanRegister] = useState<boolean | null>(null);
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api
+      .checkSignupInvitation(invitationCode)
+      .then((check) => setCanRegister(check.valid))
+      .catch(() => setCanRegister(false));
+  }, []);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -23,7 +35,8 @@ export default function AuthPage({ onAuthenticated }: { onAuthenticated: (user: 
       const user =
         mode === "login"
           ? await api.login(username, password)
-          : await api.register(username, displayName || username, password);
+          : await api.register(username, displayName || username, password, invitationCode || undefined);
+      if (invitationCode) window.history.replaceState(null, "", "/"); // lien utilisé : on le retire de l'adresse
       onAuthenticated(user);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Une erreur est survenue.");
@@ -65,6 +78,15 @@ export default function AuthPage({ onAuthenticated }: { onAuthenticated: (user: 
           ))}
         </div>
 
+        {mode === "register" && canRegister !== true ? (
+          <p className="rounded-lg bg-stone-100 px-3 py-3 text-sm text-stone-700 dark:bg-stone-900 dark:text-stone-300">
+            {canRegister === null
+              ? "Vérification du lien…"
+              : invitationCode
+                ? "Ce lien d'inscription n'est plus valable : il a déjà servi ou il a expiré (10 minutes). Demande un nouveau lien à un membre."
+                : "L'inscription se fait uniquement sur invitation : demande un lien à un membre de l'appli."}
+          </p>
+        ) : (
         <form onSubmit={submit} className="space-y-4">
           <label className="block">
             <span className="mb-1 block text-sm font-medium">Identifiant</span>
@@ -127,6 +149,7 @@ export default function AuthPage({ onAuthenticated }: { onAuthenticated: (user: 
             {busy ? "Un instant…" : mode === "login" ? "Se connecter" : "Créer mon compte"}
           </button>
         </form>
+        )}
       </div>
     </main>
   );

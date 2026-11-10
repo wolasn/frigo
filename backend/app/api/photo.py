@@ -12,7 +12,7 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -44,6 +44,7 @@ from app.services.photo import (
     Photo,
     analyze_with_claude,
     analyze_with_ollama,
+    warm_up_ollama,
 )
 from app.services.planning import recompute_reservations, scope_of
 from app.services.settings import get_setting
@@ -181,6 +182,22 @@ def _scan_out(session: Session, user: User, scan: PhotoScan) -> ScanOut:
 
 
 # ---------- Routes ----------
+
+
+class WarmUpOut(BaseModel):
+    engine: ScanEngine
+    warming: bool  # chargement du modèle local lancé
+
+
+@router.post("/warm-up")
+def warm_up(background: BackgroundTasks, session: DbSession, user: CurrentUser) -> WarmUpOut:
+    """Ouverture de la fenêtre photo : avec le modèle local, on le charge pendant que l'utilisateur
+    cadre sa photo. Réponse immédiate ; le chargement continue en arrière-plan."""
+    engine = ScanEngine(get_setting(session, "photo_engine"))
+    if engine != ScanEngine.LOCAL:
+        return WarmUpOut(engine=engine, warming=False)
+    background.add_task(warm_up_ollama, get_setting(session, "photo_local_url"), get_setting(session, "photo_local_model"))
+    return WarmUpOut(engine=engine, warming=True)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

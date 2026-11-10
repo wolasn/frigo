@@ -191,6 +191,20 @@ DEFAULT_LOCAL_MODEL = "qwen2.5vl:7b"
 # Connexion courte : un PC éteint ou hors réseau est détecté vite, et l'API Claude prend le relais.
 # Lecture longue : un modèle local sur carte graphique peut mettre plusieurs minutes à répondre.
 OLLAMA_TIMEOUT = httpx.Timeout(600.0, connect=5.0)
+KEEP_ALIVE = "15m"  # le modèle reste en mémoire de la carte graphique 15 min après le dernier usage
+
+
+def warm_up_ollama(url: str, model: str, transport: httpx.BaseTransport | None = None) -> bool:
+    """Charge le modèle en mémoire sans rien analyser, pour que la photo qui suit soit rapide.
+    Requête sans message : Ollama charge le modèle et rend la main. Sans effet s'il est déjà chargé."""
+    try:
+        with httpx.Client(timeout=OLLAMA_TIMEOUT, transport=transport) as client:
+            response = client.post(f"{url.rstrip('/')}/api/chat",
+                                   json={"model": model, "messages": [], "keep_alive": KEEP_ALIVE})
+    except httpx.HTTPError as error:
+        logger.info("Préchauffage du modèle local impossible : %s", error)
+        return False
+    return response.status_code < 400
 
 
 def analyze_with_ollama(photos: list[Photo], catalogue_names: list[str], today: date, url: str, model: str,
@@ -200,6 +214,7 @@ def analyze_with_ollama(photos: list[Photo], catalogue_names: list[str], today: 
         "stream": False,
         "format": SCAN_SCHEMA,  # Ollama contraint la réponse à ce schéma JSON
         "options": {"temperature": 0},
+        "keep_alive": KEEP_ALIVE,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": build_prompt(catalogue_names, today), "images": [p.data_base64 for p in photos]},

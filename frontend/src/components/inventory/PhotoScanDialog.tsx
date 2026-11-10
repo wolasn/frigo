@@ -57,6 +57,11 @@ export default function PhotoScanDialog({
   const captureInput = useRef<HTMLInputElement>(null);
   const inventory = inventories.find((i) => i.id === target) ?? inventories[0];
 
+  // Modèle local : on le charge sur le PC pendant que l'utilisateur prend ses photos.
+  useEffect(() => {
+    api.warmUpPhotoModel().catch(() => undefined);
+  }, []);
+
   async function addFiles(files: FileList | null) {
     if (!files) return;
     setError(null);

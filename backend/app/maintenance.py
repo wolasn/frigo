@@ -7,6 +7,7 @@ from sqlalchemy import delete, exists, select
 from sqlalchemy.orm import Session
 
 from app.models import (
+    SignupInvitation,
     AuthSession,
     InventoryItem,
     InventoryRemoval,
@@ -49,6 +50,10 @@ def purge(session: Session, now: datetime | None = None) -> dict[str, int]:
     ).rowcount
 
     counts["sessions expirées"] = session.execute(delete(AuthSession).where(AuthSession.expires_at < now)).rowcount
+
+    counts["liens d'inscription expirés"] = session.execute(
+        delete(SignupInvitation).where(SignupInvitation.expires_at < now - timedelta(days=1))
+    ).rowcount
 
     counts["notifications lues"] = session.execute(
         delete(Notification).where(Notification.read_at < now - timedelta(days=READ_NOTIFICATION_DAYS))

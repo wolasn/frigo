@@ -77,6 +77,14 @@ def alice(client, db_session, monkeypatch):
     client.post("/api/auth/register", json={"username": "alice", "display_name": "Alice", "password": PASSWORD})
     if db_session.scalar(select(Food).where(Food.name == "Carotte", Food.owner_user_id.is_(None))) is None:
         pytest.skip("catalogue non chargé")
+    # réglages connus, quels que soient ceux de la base réelle (annulés à la fin du test)
+    from app.services.settings import set_setting
+
+    me = db_session.scalar(select(User).where(User.username == "alice"))
+    for key, value in {"photo_engine": "claude", "photo_local_url": "http://host.docker.internal:11434",
+                       "photo_local_model": "qwen2.5vl:7b", "photo_local_fallback": True}.items():
+        set_setting(db_session, key, value, me.id)
+    db_session.flush()
     return client.get("/api/inventories").json()[0]
 
 
@@ -179,3 +187,30 @@ def test_repli_sur_claude_si_le_modele_local_ne_repond_pas(client, db_session, a
     db_session.flush()
     response = client.post("/api/photo-scans", json={"photos": [{"media_type": "image/jpeg", "data": PIXEL}]})
     assert response.status_code == 503 and "Ollama" in response.json()["detail"]
+
+
+def test_prechauffage_du_modele_local(client, db_session, alice, monkeypatch):
+    from app.services.photo import warm_up_ollama
+    from app.services.settings import set_setting
+
+    calls = []
+    monkeypatch.setattr(photo_api, "warm_up_ollama", lambda url, model: calls.append((url, model)))
+    assert client.post("/api/photo-scans/warm-up").json() == {"engine": "claude", "warming": False}
+    assert calls == []
+
+    admin = db_session.scalar(select(User).where(User.username == "alice"))
+    set_setting(db_session, "photo_engine", "local", admin.id)
+    db_session.flush()
+    assert client.post("/api/photo-scans/warm-up").json() == {"engine": "local", "warming": True}
+    assert calls == [("http://host.docker.internal:11434", "qwen2.5vl:7b")]
+
+    seen = {}
+
+    def handler(request):
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json={"done": True})
+
+    assert warm_up_ollama("http://pc:11434", "qwen2.5vl:7b", transport=httpx.MockTransport(handler))
+    assert seen == {"model": "qwen2.5vl:7b", "messages": [], "keep_alive": "15m"}
+    unreachable = httpx.MockTransport(lambda r: (_ for _ in ()).throw(httpx.ConnectError("PC éteint")))
+    assert warm_up_ollama("http://pc:11434", "qwen2.5vl:7b", transport=unreachable) is False

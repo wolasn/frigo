@@ -1,16 +1,17 @@
 """Inscription, connexion, déconnexion et compte courant."""
 
+import os
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Cookie, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import delete
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import SESSION_COOKIE, SESSION_DURATION, CurrentUser, DbSession, set_session_cookie
-from app.models import AuthSession, User
+from app.models import AuthSession, SignupInvitation, User
 from app.models.enums import UserRole
 from app.security import (
     hash_password,
@@ -31,11 +32,19 @@ from app.services.planning import recompute_reservations
 
 router = APIRouter(prefix="/api/auth", tags=["authentification"])
 
+# Appli privée : on ne s'inscrit qu'avec un lien créé par un membre, valable 10 minutes et une seule fois.
+# Seul le tout premier compte (base vide) s'inscrit sans lien. Désactivable pour les tests.
+INVITE_REQUIRED = os.environ.get("SIGNUP_INVITE_REQUIRED", "true").lower() == "true"
+INVITE_DURATION = timedelta(minutes=10)
+MAX_ACTIVE_INVITES = 5  # liens encore valables par membre
+INVALID_INVITE = "Ce lien d'inscription n'est plus valable (déjà utilisé ou expiré) : demande-en un nouveau."
+
 
 class RegisterIn(BaseModel):
     username: str = Field(pattern=r"^[A-Za-z0-9_.-]{3,32}$")
     display_name: str = Field(min_length=1, max_length=60)
     password: str = Field(min_length=10, max_length=200)
+    invitation: str | None = Field(default=None, max_length=100)
 
 
 class LoginIn(BaseModel):
@@ -73,12 +82,21 @@ def _open_session(session: DbSession, user: User, request: Request, response: Re
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 def register(body: RegisterIn, session: DbSession, request: Request, response: Response) -> UserOut:
+    invitation = None
+    if INVITE_REQUIRED and session.scalar(select(func.count()).select_from(User)) > 0:
+        # verrou : deux inscriptions simultanées ne peuvent pas utiliser le même lien
+        invitation = session.scalar(select(SignupInvitation).where(
+            SignupInvitation.token_hash == hash_token(body.invitation or "")).with_for_update())
+        if invitation is None or invitation.used_at is not None or invitation.expires_at <= datetime.now(UTC):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail=INVALID_INVITE)
     try:
         user = create_user(session, body.username, body.display_name, body.password)
     except (UsernameTaken, IntegrityError):
         # IntegrityError : deux inscriptions simultanées avec le même identifiant.
         session.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, detail="Cet identifiant est déjà utilisé.") from None
+    if invitation is not None:
+        invitation.used_at, invitation.used_by = datetime.now(UTC), user.id
     _open_session(session, user, request, response)
     return UserOut.of(user)
 
@@ -174,3 +192,43 @@ def delete_my_account(body: DeleteAccountIn, session: DbSession, user: CurrentUs
     recompute_reservations(session)
     session.commit()
     response.delete_cookie(SESSION_COOKIE, path="/")
+
+
+# ---------- Liens d'inscription ----------
+
+
+class InvitationOut(BaseModel):
+    code: str  # à mettre dans le lien ; jamais stocké en clair
+    expires_at: datetime
+
+
+class InvitationCheck(BaseModel):
+    valid: bool
+    required: bool
+    expires_at: datetime | None = None
+
+
+@router.post("/invitations", status_code=status.HTTP_201_CREATED)
+def create_invitation(session: DbSession, user: CurrentUser) -> InvitationOut:
+    """Nouveau lien d'inscription : une seule utilisation, valable 10 minutes."""
+    now = datetime.now(UTC)
+    active = session.scalar(select(func.count()).select_from(SignupInvitation).where(
+        SignupInvitation.created_by == user.id, SignupInvitation.used_at.is_(None), SignupInvitation.expires_at > now))
+    if active >= MAX_ACTIVE_INVITES:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
+                            detail=f"Déjà {MAX_ACTIVE_INVITES} liens en cours : attends qu'ils expirent (10 minutes).")
+    code = new_session_token()
+    invitation = SignupInvitation(token_hash=hash_token(code), created_by=user.id, expires_at=now + INVITE_DURATION)
+    session.add(invitation)
+    session.commit()
+    return InvitationOut(code=code, expires_at=invitation.expires_at)
+
+
+@router.get("/invitations/check")
+def check_invitation(session: DbSession, code: str = "") -> InvitationCheck:
+    """La page d'inscription vérifie le lien avant d'afficher le formulaire."""
+    if not INVITE_REQUIRED or session.scalar(select(func.count()).select_from(User)) == 0:
+        return InvitationCheck(valid=True, required=False)
+    invitation = session.scalar(select(SignupInvitation).where(SignupInvitation.token_hash == hash_token(code[:100])))
+    valid = invitation is not None and invitation.used_at is None and invitation.expires_at > datetime.now(UTC)
+    return InvitationCheck(valid=valid, required=True, expires_at=invitation.expires_at if valid else None)
