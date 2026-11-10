@@ -19,7 +19,10 @@ import anthropic
 import httpx
 
 from app.secrets import read_secret
-from app.services.ai_recipes import FALLBACK_BETA, MODEL, AiError, AiNotConfigured
+from app.services.ai_recipes import AiError, AiNotConfigured, create_message
+
+# Vision et lecture des dates très bonnes, deux fois moins cher qu'Opus 5.5 pour cette tâche.
+PHOTO_MODEL = "claude-sonnet-5-5"
 
 logger = logging.getLogger("frigo.photo")
 
@@ -138,11 +141,10 @@ def analyze_with_claude(photos: list[Photo], catalogue_names: list[str], today: 
     ]
     content.append({"type": "text", "text": build_prompt(catalogue_names, today)})
     try:
-        response = client.beta.messages.create(
-            model=MODEL,
+        response = create_message(
+            client,
+            PHOTO_MODEL,
             max_tokens=16000,
-            betas=[FALLBACK_BETA],
-            fallbacks="default",
             system=SYSTEM_PROMPT,
             output_config={"effort": "medium", "format": {"type": "json_schema", "schema": SCAN_SCHEMA}},
             messages=[{"role": "user", "content": content}],

@@ -15,6 +15,7 @@ from app.models.enums import Diet, Difficulty, RecipeSource, RecipeStatus, UserR
 from app.services.ai_recipes import AiError, GenerationRequest
 from app.services.ai_recipes import generate as ai_generate
 from app.services.marmiton import MarmitonError
+from app.services.settings import get_setting
 from app.services.proposals import (
     Evaluation,
     Options,
@@ -338,6 +339,7 @@ def _generation_request(session, user, body: GenerateIn) -> GenerationRequest:
         allergies=[n for n, r in exclusions if r == ExclusionReason.ALLERGY],
         dislikes=[n for n, r in exclusions if r == ExclusionReason.DISLIKE],
         utensils=list(utensils), wish=(body.wish or "").strip() or None,
+        model=get_setting(session, "ai_recipe_model"),
     )
 
 

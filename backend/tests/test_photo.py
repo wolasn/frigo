@@ -49,6 +49,7 @@ def test_moteur_claude_envoie_les_images():
     assert content[0]["source"] == {"type": "base64", "media_type": "image/jpeg", "data": PIXEL}
     assert "2026-11-10" in content[2]["text"] and "Yaourt nature" in content[2]["text"]
     assert client.calls[0]["output_config"]["format"]["type"] == "json_schema"
+    assert client.calls[0]["model"] == "claude-sonnet-5-5" and client.calls[0]["fallbacks"] == "default"
     assert items[1].question and items[1].options == ["Yaourt nature", "Fromage blanc"]
     assert items[0].expires_on is None and items[1].expires_on is not None
 

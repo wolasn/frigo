@@ -194,3 +194,42 @@ def test_cle_absente(client, db_session, monkeypatch):
     monkeypatch.setattr("app.services.ai_recipes.read_secret", lambda name: None)
     response = client.post("/api/recipes/generate", json={"count": 1})
     assert response.status_code == 503 and "anthropic_api_key" in response.json()["detail"]
+
+
+class FakeBothClient(FakeClient):
+    """Expose aussi messages.create (sans bêta), utilisé pour Haiku 5.5 qui n'a pas de repli serveur."""
+
+    def __init__(self):
+        super().__init__()
+        self.plain_calls = []
+        self.messages = SimpleNamespace(create=self._plain)
+
+    def _plain(self, **kwargs):
+        self.plain_calls.append(kwargs)
+        return self._create(**kwargs)
+
+
+@pytest.mark.parametrize("model, fallback", [("claude-opus-5-5", True), ("claude-sonnet-5-5", True), ("claude-haiku-5-5", False)])
+def test_modele_choisi_et_repli(model, fallback):
+    client = FakeBothClient()
+    generate(request(model=model), client)
+    call = client.calls[0]
+    assert call["model"] == model
+    assert ("fallbacks" in call) is fallback and bool(client.plain_calls) is not fallback
+
+
+def test_modele_des_recettes_regle_par_le_super_admin(client, db_session, catalogue, monkeypatch):
+    seen = []
+
+    def capture(req):
+        seen.append(req.model)
+        return fake_generate(req)
+
+    monkeypatch.setattr(recipes_api, "ai_generate", capture)
+    client.post("/api/auth/register", json={"username": "admin", "display_name": "Admin", "password": PASSWORD})
+    promote(db_session, "admin")
+    client.post("/api/recipes/generate", json={"count": 1})
+    assert client.patch("/api/admin/settings", json={"ai_recipe_model": "claude-haiku-5-5"}).status_code == 200
+    client.post("/api/recipes/generate", json={"count": 1})
+    assert seen == ["claude-opus-5-5", "claude-haiku-5-5"]
+    assert client.patch("/api/admin/settings", json={"ai_recipe_model": "gpt"}).status_code == 422

@@ -17,7 +17,11 @@ from app.secrets import read_secret
 
 logger = logging.getLogger("frigo.ai")
 
-MODEL = "claude-opus-5-5"
+MODEL = "claude-opus-5-5"  # modèle des recettes IA par défaut (réglable par le super-administrateur)
+# Modèles proposés dans l'administration, du plus précis au plus économique.
+RECIPE_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
+# Repli automatique côté serveur en cas de refus : Opus 5.5 et Sonnet 5.5 l'acceptent, pas Haiku 5.5.
+WITH_FALLBACK = {"claude-opus-5-5", "claude-sonnet-5-5"}
 MAX_TOKENS = 16000
 EFFORT = "medium"  # la valeur par défaut de ce modèle, écrite explicitement
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
@@ -112,6 +116,7 @@ class GenerationRequest:
     dislikes: list[str]
     utensils: list[str]
     wish: str | None = None  # envie libre : « plat rapide », « soupe »…
+    model: str = MODEL
 
 
 @dataclass
@@ -152,6 +157,13 @@ def build_prompt(req: GenerationRequest) -> str:
     return "\n".join(lines)
 
 
+def create_message(client: Any, model: str, **params: Any) -> Any:
+    """Appel au modèle, avec le repli automatique quand le modèle le permet."""
+    if model in WITH_FALLBACK:
+        return client.beta.messages.create(model=model, betas=[FALLBACK_BETA], fallbacks="default", **params)
+    return client.messages.create(model=model, **params)
+
+
 def _client() -> anthropic.Anthropic:
     key = read_secret("anthropic_api_key")
     if not key:
@@ -163,11 +175,10 @@ def generate(req: GenerationRequest, client: Any | None = None) -> list[Generate
     """Appelle Claude et renvoie les recettes validées. Lève AiError avec un message en français."""
     client = client or _client()
     try:
-        response = client.beta.messages.create(
-            model=MODEL,
+        response = create_message(
+            client,
+            req.model,
             max_tokens=MAX_TOKENS,
-            betas=[FALLBACK_BETA],
-            fallbacks="default",  # en cas de refus, l'API relance sur le modèle de repli recommandé
             system=SYSTEM_PROMPT,
             output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": RECIPE_SCHEMA}},
             messages=[{"role": "user", "content": build_prompt(req)}],

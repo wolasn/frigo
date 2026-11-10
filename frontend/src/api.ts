@@ -92,7 +92,12 @@ export type ScanLineEdit = {
   merge?: boolean;
 };
 
-export type AdminSettings = { photo_engine: "claude" | "local"; photo_local_url: string; photo_local_model: string };
+export type AdminSettings = {
+  photo_engine: "claude" | "local";
+  photo_local_url: string;
+  photo_local_model: string;
+  ai_recipe_model: "claude-opus-5-5" | "claude-sonnet-5-5" | "claude-haiku-5-5";
+};
 
 export type RemovalReason = "consumed" | "discarded" | "given" | "cooked" | "other";
 

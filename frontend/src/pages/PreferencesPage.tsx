@@ -339,13 +339,13 @@ function AdminSettingsSection() {
 
   if (!settings) return failure ? <ErrorMessage message={failure} /> : null;
   return (
-    <Section title="Administration · analyse photo" hint="Réglage appliqué à tous les utilisateurs.">
+    <Section title="Administration · IA" hint="Réglage appliqué à tous les utilisateurs.">
       <div className="space-y-3 text-sm">
         <label className="flex items-start gap-2">
           <input type="radio" className="mt-1" checked={settings.photo_engine === "claude"} onChange={() => save({ photo_engine: "claude" })} />
           <span>
-            <span className="font-medium">API Claude</span>
-            <span className="block text-stone-500">Précis, lit les dates sur les emballages ; quelques centimes par analyse, la photo quitte le PC le temps de l'analyse.</span>
+            <span className="font-medium">API Claude (Claude Sonnet 5.5)</span>
+            <span className="block text-stone-500">Précis, lit les dates sur les emballages ; environ 0,02 $ par photo, la photo quitte le PC le temps de l'analyse.</span>
           </span>
         </label>
         <label className="flex items-start gap-2">
@@ -364,6 +364,18 @@ function AdminSettingsSection() {
             </button>
           </div>
         )}
+        <label className="block border-t border-stone-200 pt-3 dark:border-stone-800">
+          <span className="mb-1 block font-medium">Modèle des recettes inventées par l'IA</span>
+          <select
+            className={inputClass}
+            value={settings.ai_recipe_model}
+            onChange={(e) => save({ ai_recipe_model: e.target.value as AdminSettings["ai_recipe_model"] })}
+          >
+            <option value="claude-opus-5-5">Claude Opus 5.5 : le plus inventif, environ 0,03 $ par recette</option>
+            <option value="claude-sonnet-5-5">Claude Sonnet 5.5 : très bon, environ 0,015 $ par recette</option>
+            <option value="claude-haiku-5-5">Claude Haiku 5.5 : le plus économique, moins de 0,001 $ par recette</option>
+          </select>
+        </label>
         {saved && <p className="text-brand-700 dark:text-brand-500">{saved}</p>}
         <ErrorMessage message={failure} />
       </div>

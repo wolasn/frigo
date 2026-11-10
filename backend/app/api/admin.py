@@ -63,12 +63,14 @@ class SettingsOut(BaseModel):
     photo_engine: Literal["claude", "local"]
     photo_local_url: str
     photo_local_model: str
+    ai_recipe_model: Literal["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
 
 
 class SettingsIn(BaseModel):
     photo_engine: Literal["claude", "local"] | None = None
     photo_local_url: str | None = Field(default=None, max_length=200, pattern=r"^https?://")
     photo_local_model: str | None = Field(default=None, min_length=1, max_length=100)
+    ai_recipe_model: Literal["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"] | None = None
 
 
 def _settings(session) -> SettingsOut:

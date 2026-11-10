@@ -68,8 +68,10 @@ seules les lignes détectées sont gardées 30 jours.
 
 - La caméra dans la page demande une adresse sécurisée (https, ou localhost sur le PC). Depuis un
   téléphone sur le Wi-Fi (http://adresse-du-pc:8000), le bouton ouvre l'appareil photo du téléphone.
-- Moteur choisi par le super-administrateur (Préférences → Administration) : API Claude (défaut)
-  ou modèle local Ollama. Pour le mode local sur le PC :
+- Moteur choisi par le super-administrateur (Préférences → Administration) : API Claude (défaut,
+  modèle Claude Sonnet 5.5)
+  ou modèle local Ollama. Le modèle des recettes IA (Opus 5.5, Sonnet 5.5 ou Haiku 5.5) se règle au même
+  endroit. Pour le mode local sur le PC :
 
 ```
 ollama pull qwen2.5vl:7b
