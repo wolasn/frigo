@@ -25,7 +25,8 @@ def env(client, db_session):
     db_session.flush()
     carotte = Food(name="Testcarotte", category_id=category.id, reference_unit=ReferenceUnit.GRAM, is_vegetarian=True)
     poisson = Food(name="Testpoisson", category_id=category.id, reference_unit=ReferenceUnit.GRAM)
-    db_session.add_all([carotte, poisson])
+    basique = Food(name="Testbasique", category_id=category.id, reference_unit=ReferenceUnit.GRAM)
+    db_session.add_all([carotte, poisson, basique])
     db_session.flush()
     db_session.add_all([
         FoodShelfLife(food_id=carotte.id, storage_type=StorageType.FRIDGE, days=21),
@@ -42,6 +43,7 @@ def env(client, db_session):
     recipes = {
         "puree": recipe("test-puree", ["500 g de testcarottes"]),
         "poisson": recipe("test-poisson", ["300 g de testpoisson", "2 feuilles de gelatinetest", "poivre"]),
+        "soupe": recipe("test-soupe", ["500 g de testcarottes", "1 eau", "1 testbasique"]),
     }
     db_session.flush()
 
@@ -58,7 +60,7 @@ def env(client, db_session):
         assert response.status_code == 201, response.text
         return response.json()
 
-    return {"plan": plan, "inventory": inventory, "fridge": fridge}
+    return {"plan": plan, "inventory": inventory, "fridge": fridge, "basique": basique}
 
 
 def personal_lines(client):
@@ -90,6 +92,15 @@ def test_perissable_date_recommandee_et_ingredient_non_reconnu(client, env):
     unknown = lines["Gelatinetest (2 feuilles de gelatinetest)"]
     assert unknown["quantity"] is None and unknown["aisle"] == "Divers"
     assert "Poivre" not in lines  # assaisonnement : jamais ajouté d'office
+
+
+def test_basiques_infinis_jamais_a_acheter(client, env):
+    env["plan"]("soupe", 2)
+    assert "Testbasique" in personal_lines(client)
+    assert client.put(f"/api/preferences/basics/{env['basique'].id}").status_code == 200
+    lines = personal_lines(client)
+    assert "Testcarotte" in lines
+    assert not any(label.startswith(("Eau", "Testbasique")) for label in lines)
 
 
 def test_perissable_pour_deux_repas_eloignes_deux_lignes(client, env):

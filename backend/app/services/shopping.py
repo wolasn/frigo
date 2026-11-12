@@ -29,6 +29,7 @@ from app.models import (
     ShoppingListItemMeal,
     StorageLocation,
     User,
+    UserInfiniteFood,
 )
 from app.models.enums import ItemKind, MealStatus, ReferenceUnit, ShoppingOrigin, StorageType
 from app.services.ingredients import parse_ingredient
@@ -182,8 +183,14 @@ def _needs(
         InventoryItem.inventory_id.in_(allowed), InventoryItem.archived_at.is_(None),
         InventoryItem.kind == ItemKind.INGREDIENT, InventoryItem.food_id.is_not(None),
     ))) if allowed else set()
+    always_infinite = set(session.scalars(select(Food.id).where(Food.is_always_infinite.is_(True))))
+    infinite_of_user: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
+    for user_id, food_id in session.execute(select(UserInfiniteFood.user_id, UserInfiniteFood.food_id).where(
+        UserInfiniteFood.user_id.in_({m.user_id for m in meals}))) if meals else []:
+        infinite_of_user[user_id].add(food_id)
 
     for meal in meals:
+        infinite = always_infinite | infinite_of_user[meal.user_id]
         # 1. Manques calculés par le moteur (aliments reconnus avec une quantité).
         for shortage in result.shortages.get(meal.id, []):
             if shortage.food_id is None:
@@ -196,8 +203,8 @@ def _needs(
         if meal.recipe_id is None:
             continue
         for ingredient in ingredients_by_recipe.get(meal.recipe_id, []):
-            if ingredient.quantity is None:
-                continue  # assaisonnement « à vérifier » : jamais ajouté d'office
+            if ingredient.quantity is None or ingredient.food_id in infinite:
+                continue  # assaisonnement « à vérifier » ou basique infini : jamais ajouté d'office
             if ingredient.food_id is None:
                 label = parse_ingredient(ingredient.raw_text).name.capitalize()
                 needs.append(_Need(None, f"{label} ({ingredient.raw_text})", None, meal, None, False, False))
