@@ -7,7 +7,6 @@
     python -m app.cli check-db                               vérifie la base maintenant
     python -m app.cli purge                                  lance la purge nocturne
     python -m app.cli daily-recipes                          prépare les recettes du jour maintenant
-    python -m app.cli daily-agent [identifiant]              fait passer l'agent IA (un compte, ou tous les actifs)
     python -m app.cli test-email                             envoie un e-mail de test au super-administrateur
 """
 
@@ -57,8 +56,6 @@ def main(argv: list[str] | None = None) -> None:
     commands.add_parser("check-db", help="vérifier la base maintenant (une tentative) et alerter si besoin")
     commands.add_parser("purge", help="lancer la purge nocturne maintenant")
     commands.add_parser("daily-recipes", help="préparer les recettes du jour des comptes qui n'en ont pas encore")
-    agent = commands.add_parser("daily-agent", help="faire passer l'agent IA des recettes du jour maintenant")
-    agent.add_argument("username", nargs="?", help="un seul compte (tous les comptes actifs sinon)")
     commands.add_parser("test-email", help="envoyer un e-mail de test au super-administrateur")
     args = parser.parse_args(argv)
 
@@ -104,20 +101,6 @@ def main(argv: list[str] | None = None) -> None:
             from app.services.daily import run_daily
 
             print(f"Recettes du jour préparées pour {run_daily(session)} compte(s)")
-        elif args.command == "daily-agent":
-            from app.services.daily_agent import run_agent, run_all
-
-            if args.username:
-                target = session.scalar(select(User).where(User.username == args.username))
-                if target is None:
-                    sys.exit(f"Compte introuvable : {args.username}")
-                run = run_agent(session, target)
-                print(f"Agent : {run.status}, {len(run.steps)} outil(s), {run.cost_usd} $"
-                      + (f" — {run.error}" if run.error else ""))
-                if run.message:
-                    print(run.message)
-            else:
-                print(f"Agent passé pour {run_all(session)} compte(s)")
         elif args.command == "import-marmiton-selection":
             from app.seed.marmiton_selection import PER_QUERY, QUERIES
             from app.services.marmiton import MarmitonClient, MarmitonError

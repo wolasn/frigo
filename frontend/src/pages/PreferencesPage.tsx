@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { api, type AdminSettings, type AgentRun, type AiUsage, type Category, type UsageCall, type UserUsage, type Food, type Preferences, type User } from "../api";
+import { api, type AdminSettings, type AiUsage, type Category, type UsageCall, type UserUsage, type Food, type Preferences, type User } from "../api";
 import { ErrorMessage, Field, inputClass, primaryButton, secondaryButton, Loading } from "../components/ui";
 import CategorySelect from "../components/inventory/CategorySelect";
 
@@ -160,7 +160,6 @@ export default function PreferencesPage({ user, onUserChanged, onAccountDeleted 
       {message && <p className="rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-700 dark:bg-stone-800 dark:text-brand-500">{message}</p>}
 
       {user.role === "super_admin" && <AdminSettingsSection />}
-      {user.role === "super_admin" && <DailyAgentSection />}
       {user.role === "super_admin" && <AiUsageSection />}
 
       <Section title="Repas" hint="Valeurs utilisées par défaut dans les propositions de repas.">
@@ -434,150 +433,6 @@ function AdminSettingsSection() {
   );
 }
 
-const AGENT_STATUS: Record<AgentRun["status"], string> = { changed: "a changé le menu", kept: "a gardé le menu", error: "erreur" };
-const TOOL_LABELS: Record<string, string> = {
-  profil: "profil",
-  inventaire: "inventaire",
-  historique: "historique",
-  recettes_du_jour_actuelles: "menu actuel",
-  chercher_dans_la_base: "recherche base",
-  chercher_sur_marmiton: "Marmiton",
-  detail_recette: "détail",
-  definir_recettes_du_jour: "nouveau menu",
-};
-
-/** Agent IA des recettes du jour (super-administrateur) : activation, modèle, consignes, essai et journal. */
-function DailyAgentSection() {
-  const [settings, setSettings] = useState<AdminSettings | null>(null);
-  const [prompt, setPrompt] = useState("");
-  const [runs, setRuns] = useState<AgentRun[] | null>(null);
-  const [running, setRunning] = useState(false);
-  const [last, setLast] = useState<AgentRun | null>(null);
-  const [saved, setSaved] = useState<string | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
-
-  const loadRuns = () => api.dailyAgentRuns().then(setRuns).catch(() => setRuns([]));
-
-  useEffect(() => {
-    api
-      .adminSettings()
-      .then((s) => {
-        setSettings(s);
-        setPrompt(s.daily_agent_prompt);
-      })
-      .catch(() => setFailure("Impossible de lire les réglages de l'agent."));
-    loadRuns();
-  }, []);
-
-  async function save(change: Partial<AdminSettings>) {
-    setFailure(null);
-    try {
-      const updated = await api.updateAdminSettings(change);
-      setSettings(updated);
-      setPrompt(updated.daily_agent_prompt);
-      setSaved("Enregistré.");
-      setTimeout(() => setSaved(null), 2000);
-    } catch (err) {
-      setFailure(err instanceof Error ? err.message : "Enregistrement impossible.");
-    }
-  }
-
-  async function runNow() {
-    setFailure(null);
-    setRunning(true);
-    setLast(null);
-    try {
-      setLast(await api.runDailyAgent());
-      loadRuns();
-    } catch (err) {
-      setFailure(err instanceof Error ? err.message : "Lancement impossible.");
-    } finally {
-      setRunning(false);
-    }
-  }
-
-  if (!settings) return failure ? <ErrorMessage message={failure} /> : null;
-  return (
-    <Section
-      title="Administration · agent des recettes du jour"
-      hint="Chaque matin, après le choix automatique, un agent IA relit le profil, l'inventaire et l'historique de chaque compte actif, cherche dans la base et sur Marmiton, puis garde ou remplace les trois recettes du jour."
-    >
-      <div className="space-y-3 text-sm">
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={settings.daily_agent_enabled} onChange={(e) => save({ daily_agent_enabled: e.target.checked })} />
-          Faire passer l'agent chaque matin
-        </label>
-        <label className="block">
-          <span className="mb-1 block font-medium">Modèle de l'agent</span>
-          <select
-            className={inputClass}
-            value={settings.daily_agent_model}
-            onChange={(e) => save({ daily_agent_model: e.target.value as AdminSettings["daily_agent_model"] })}
-          >
-            <option value="claude-opus-5-5">Claude Opus 5.5 : le plus fin</option>
-            <option value="claude-sonnet-5-5">Claude Sonnet 5.5 : environ deux fois moins cher</option>
-            <option value="claude-haiku-5-5">Claude Haiku 5.5 : très économique, choix plus simples</option>
-          </select>
-        </label>
-        <label className="block">
-          <span className="mb-1 block font-medium">Consignes de l'agent</span>
-          <textarea className={inputClass + " min-h-48 font-mono text-xs"} value={prompt} onChange={(e) => setPrompt(e.target.value)} maxLength={4000} />
-          <span className="mt-1 block text-xs text-stone-500">
-            Ce que l'agent doit privilégier. Le reste (régime, allergies, ustensiles, pas de répétition sur 14 jours) est garanti par l'application.
-          </span>
-        </label>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            className={secondaryButton}
-            disabled={prompt.trim().length < 10 || prompt === settings.daily_agent_prompt}
-            onClick={() => save({ daily_agent_prompt: prompt.trim() })}
-          >
-            Enregistrer les consignes
-          </button>
-          <button className="text-stone-500 hover:underline disabled:opacity-50" disabled={prompt === settings.daily_agent_default_prompt} onClick={() => setPrompt(settings.daily_agent_default_prompt)}>
-            Revenir aux consignes de départ
-          </button>
-          <button className={primaryButton + " sm:ml-auto"} onClick={runNow} disabled={running}>
-            {running ? "L'agent réfléchit… (jusqu'à deux minutes)" : "Lancer pour moi maintenant"}
-          </button>
-        </div>
-        {saved && <p className="text-brand-700 dark:text-brand-500">{saved}</p>}
-        <ErrorMessage message={failure} />
-        {last && (
-          <p className="rounded-lg bg-stone-50 p-3 dark:bg-stone-950">
-            <strong>{AGENT_STATUS[last.status]}</strong> · {last.steps.length} outil(s) · {dollars(last.cost_usd)}
-            {last.message && <span className="mt-1 block">« {last.message} »</span>}
-            {last.error && <span className="mt-1 block text-red-700 dark:text-red-400">{last.error}</span>}
-            <span className="mt-1 block text-xs text-stone-500">Le résultat est visible dans l'onglet Repas.</span>
-          </p>
-        )}
-        <div className="border-t border-stone-200 pt-3 dark:border-stone-800">
-          <h3 className="mb-1 font-medium">Journal</h3>
-          {runs === null ? (
-            <Loading inline />
-          ) : runs.length === 0 ? (
-            <p className="text-stone-500">L'agent n'est pas encore passé.</p>
-          ) : (
-            <ul className="max-h-80 space-y-2 overflow-y-auto">
-              {runs.map((r) => (
-                <li key={r.id} className="rounded-lg bg-stone-50 p-2 text-xs dark:bg-stone-950">
-                  <span className="font-medium">
-                    {new Date(r.created_at).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" })} · {r.username} · {AGENT_STATUS[r.status]}
-                  </span>
-                  <span className="text-stone-500"> · {MODEL_LABELS[r.model] ?? r.model} · {dollars(r.cost_usd)}</span>
-                  <span className="block text-stone-500">{r.steps.map((s) => TOOL_LABELS[s.outil] ?? s.outil).join(" → ")}</span>
-                  {r.message && <span className="block">« {r.message} »</span>}
-                  {r.error && <span className="block text-red-700 dark:text-red-400">{r.error}</span>}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </div>
-    </Section>
-  );
-}
-
 const dollars = (value: number) => `${value < 1 ? value.toFixed(4) : value.toFixed(2)} $`.replace(".", ",");
 const MODEL_LABELS: Record<string, string> = {
   "claude-opus-5-5": "Opus 5.5",
@@ -615,7 +470,7 @@ function AiUsageSection() {
   }
 
   return (
-    <Section title="Administration · coûts de l'IA" hint="Coût estimé à chaque appel (recettes IA, analyses photo et agent des recettes du jour), d'après les jetons et les tarifs publics.">
+    <Section title="Administration · coûts de l'IA" hint="Coût estimé à chaque appel (recettes IA et analyses photo), d'après les jetons et les tarifs publics.">
       <div className="space-y-3 text-sm">
         <div className="flex flex-wrap items-center gap-3">
           <input type="month" className={inputClass + " w-auto"} value={month} onChange={(e) => e.target.value && setMonth(e.target.value)} disabled={allTime} aria-label="Mois" />
@@ -641,7 +496,6 @@ function AiUsageSection() {
                       <th className="py-1 pr-2 font-medium">Utilisateur</th>
                       <th className="py-1 pr-2 text-right font-medium">Recettes</th>
                       <th className="py-1 pr-2 text-right font-medium">Photos</th>
-                      <th className="py-1 pr-2 text-right font-medium">Agent</th>
                       <th className="py-1 text-right font-medium">Total</th>
                     </tr>
                   </thead>
@@ -674,14 +528,11 @@ function UsageRow({ user, open, calls, onToggle }: { user: UserUsage; open: bool
         <td className="py-1.5 pr-2 text-right">
           {dollars(user.photos.cost_usd)} <span className="text-xs text-stone-500">({user.photos.calls})</span>
         </td>
-        <td className="py-1.5 pr-2 text-right">
-          {dollars(user.agent.cost_usd)} <span className="text-xs text-stone-500">({user.agent.calls})</span>
-        </td>
         <td className="py-1.5 text-right font-medium">{dollars(user.cost_usd)}</td>
       </tr>
       {open && (
         <tr>
-          <td colSpan={5} className="pb-2">
+          <td colSpan={4} className="pb-2">
             {calls === null ? (
               <Loading inline />
             ) : (
@@ -690,7 +541,7 @@ function UsageRow({ user, open, calls, onToggle }: { user: UserUsage; open: bool
                   <li key={i} className="flex flex-wrap justify-between gap-2">
                     <span>
                       {new Date(c.created_at).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" })} ·{" "}
-                      {{ recipe: "recette", photo: "photo", agent: "agent" }[c.kind] ?? c.kind} · {MODEL_LABELS[c.model] ?? c.model}
+                      {c.kind === "recipe" ? "recette" : "photo"} · {MODEL_LABELS[c.model] ?? c.model}
                     </span>
                     <span className="text-stone-500">
                       {c.input_tokens} + {c.output_tokens} jetons · <span className="text-stone-700 dark:text-stone-300">{dollars(c.cost_usd)}</span>

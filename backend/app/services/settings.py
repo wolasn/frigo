@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 
 from app.models import AppSetting
 from app.services.ai_recipes import MODEL as DEFAULT_RECIPE_MODEL
-from app.services.daily_agent_prompt import DEFAULT_INSTRUCTIONS as DEFAULT_AGENT_INSTRUCTIONS
 from app.services.photo import DEFAULT_LOCAL_MODEL, DEFAULT_OLLAMA_URL
 
 DEFAULTS: dict[str, Any] = {
@@ -16,9 +15,6 @@ DEFAULTS: dict[str, Any] = {
     "photo_local_model": DEFAULT_LOCAL_MODEL,
     "photo_local_fallback": True,  # modèle local injoignable : passer par l'API Claude
     "ai_recipe_model": DEFAULT_RECIPE_MODEL,  # claude-opus-5-5 | claude-sonnet-5-5 | claude-haiku-5-5
-    "daily_agent_enabled": True,  # l'agent IA revoit chaque matin les recettes du jour
-    "daily_agent_model": DEFAULT_RECIPE_MODEL,
-    "daily_agent_prompt": DEFAULT_AGENT_INSTRUCTIONS,
 }
 
 

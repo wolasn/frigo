@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 from app.models import (
     SignupInvitation,
     AuthSession,
-    DailyAgentRun,
     DailyRecipe,
     InventoryItem,
     InventoryRemoval,
@@ -59,9 +58,6 @@ def purge(session: Session, now: datetime | None = None) -> dict[str, int]:
 
     counts["recettes du jour"] = session.execute(
         delete(DailyRecipe).where(DailyRecipe.day < (now - timedelta(days=30)).date())
-    ).rowcount
-    counts["passages de l'agent"] = session.execute(
-        delete(DailyAgentRun).where(DailyAgentRun.day < (now - timedelta(days=30)).date())
     ).rowcount
 
     counts["notifications lues"] = session.execute(

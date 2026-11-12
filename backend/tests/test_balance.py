@@ -86,13 +86,7 @@ def test_semaine_vide(client, week):
     assert client.get("/api/agenda/balance", params={"start": week["monday"], "agenda": "nimporte"}).status_code == 422
 
 
-def test_alternatives_et_remplacement(client, week, monkeypatch):
-    import app.api.agenda as agenda_api
-
-    # Seules les recettes du test : la base réelle en contient d'autres, parfois mieux classées.
-    real_propose = agenda_api.propose
-    monkeypatch.setattr(agenda_api, "propose", lambda *a, **k: [
-        e for e in real_propose(*a, **k) if e.recipe.title.startswith("test-")])
+def test_alternatives_et_remplacement(client, week):
     meal_id = week["plan"](week["beef"], 0)
     response = client.get(f"/api/agenda/{meal_id}/alternatives", params={"focus": "red_meat"})
     assert response.status_code == 200, response.text

@@ -122,14 +122,14 @@ class AiUsage(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), index=True
     )
     username: Mapped[str] = mapped_column(Text, nullable=False)
-    kind: Mapped[str] = mapped_column(Text, nullable=False)  # recipe | photo | agent
+    kind: Mapped[str] = mapped_column(Text, nullable=False)  # recipe | photo
     model: Mapped[str] = mapped_column(Text, nullable=False)
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(10, 6), nullable=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
 
-    __table_args__ = (CheckConstraint("kind IN ('recipe', 'photo', 'agent')", name="kind_known"),)
+    __table_args__ = (CheckConstraint("kind IN ('recipe', 'photo')", name="kind_known"),)
 
 
 class SignupInvitation(Base):
