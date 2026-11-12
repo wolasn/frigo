@@ -122,3 +122,23 @@ class Notification(Base):
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (Index("ix_notifications_user_read", "user_id", "read_at"),)
+
+
+class DailyRecipe(Base):
+    """Recettes du jour d'un utilisateur : trois par jour, choisies chaque matin."""
+
+    __tablename__ = "daily_recipes"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    recipe_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("recipes.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    origin: Mapped[str] = mapped_column(Text, nullable=False)  # base, marmiton ou ia
+    query: Mapped[str | None] = mapped_column(Text)  # recherche Marmiton de saison qui l'a apportée
+    created_at: Mapped[datetime] = created_at_column()
+
+    __table_args__ = (CheckConstraint("origin in ('base', 'marmiton', 'ia')", name="origin"),)

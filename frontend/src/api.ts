@@ -169,6 +169,11 @@ export type RecipeCard = {
   disliked: string[];
 };
 
+export type DailyRecipes = {
+  day: string;
+  recipes: { recipe: RecipeCard; origin: "base" | "marmiton" | "ia"; reasons: string[] }[];
+};
+
 export type IngredientStatus = "ok" | "partial" | "missing" | "unknown" | "seasoning" | "infinite";
 
 export type RecipeDetail = RecipeCard & {
@@ -423,6 +428,7 @@ export const api = {
 
   proposals: (q: ProposalQuery) => request<RecipeCard[]>("GET", `/api/proposals?${query(q)}`),
   favorites: () => request<RecipeCard[]>("GET", "/api/recipes/favorites"),
+  dailyRecipes: () => request<DailyRecipes>("GET", "/api/recipes/daily"),
   recipe: (id: string, servings?: number) => request<RecipeDetail>("GET", `/api/recipes/${id}?${query({ servings })}`),
   updateMeta: (id: string, body: MetaUpdate) => request<RecipeCard>("PUT", `/api/recipes/${id}/meta`, body),
   importRecipe: (url: string) => request<RecipeCard>("POST", "/api/recipes/import", { url }),

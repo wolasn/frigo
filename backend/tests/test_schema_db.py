@@ -45,7 +45,7 @@ def new_user(conn, username: str, role: str = "user") -> str:
 def test_toutes_les_tables_existent_avec_rls(conn):
     tables = set(inspect(conn).get_table_names(schema="public")) - {"alembic_version"}
     assert tables == set(Base.metadata.tables)
-    assert len(tables) == 37  # + location_shelf_life, ai_usage, signup_invitations
+    assert len(tables) == 38  # + location_shelf_life, ai_usage, signup_invitations, daily_recipes
     without_rls = conn.execute(
         text("select relname from pg_class where relnamespace = 'public'::regnamespace and relkind = 'r' and not relrowsecurity")
     ).scalars().all()

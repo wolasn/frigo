@@ -125,6 +125,23 @@ Tailscale (gratuit) installé sur le PC et sur le serveur :
 
 Quand le PC est éteint ou en veille, les analyses partent sur l'API Claude.
 
+## Recettes du jour
+
+En haut de l'onglet Repas, trois idées par jour et par compte, préparées chaque matin à 4 h (ou à l'ouverture
+de l'onglet pour un compte qui n'en a pas encore) :
+
+1. deux recherches Marmiton de saison, qui changent chaque jour (légumes et produits de la mer du mois,
+   plats de saison), apportent quelques recettes nouvelles ;
+2. toutes les recettes de la base sont classées : produits de saison, aliments qui périment bientôt, peu
+   d'achats, notes, score santé ; un produit hors saison pénalise ; les trois choisies évitent le même produit ;
+3. sont écartées les recettes proposées ces 14 derniers jours, cuisinées ces 10 derniers jours ou prévues à
+   l'agenda dans la semaine, celles que le régime, les allergies ou les ustensiles excluent, et les desserts,
+   boissons et préparations de base (repérés au titre) ;
+4. en dernier recours, s'il manque des recettes, l'IA en invente (dans la limite quotidienne).
+
+Calendrier des saisons : `backend/app/services/season.py`. Préparer maintenant :
+`docker compose exec app python -m app.cli daily-recipes`.
+
 ## Recettes Marmiton
 
 Les recettes sont lues sur Marmiton (données structurées des fiches), au plus une requête toutes les 1,5 s,
@@ -149,6 +166,7 @@ Toujours relire une migration générée avant de l'appliquer.
 | --- | --- | --- |
 | Chaque jour à 6 h | Vérification de la base (3 essais), e-mail au super-administrateur si elle est bloquée, puis au retour | Conteneur `app` |
 | Chaque nuit à 3 h 30 | Purge : retraits de plus d'un mois, articles archivés, analyses photo de plus de 30 jours, sessions expirées | Conteneur `app` |
+| Chaque matin à 4 h | Recettes du jour des comptes connectés ces 30 derniers jours | Conteneur `app` |
 | Lundi et jeudi à 3 h | Sauvegarde compressée (`pg_dump` 17, schéma `public`) dans `./backups`, les 2 plus récentes gardées | Conteneur `backup` |
 
 Commandes utiles :

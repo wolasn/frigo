@@ -6,6 +6,7 @@
     python -m app.cli rematch-ingredients                    refait le rapprochement des ingrédients
     python -m app.cli check-db                               vérifie la base maintenant
     python -m app.cli purge                                  lance la purge nocturne
+    python -m app.cli daily-recipes                          prépare les recettes du jour maintenant
     python -m app.cli test-email                             envoie un e-mail de test au super-administrateur
 """
 
@@ -54,6 +55,7 @@ def main(argv: list[str] | None = None) -> None:
     selection.add_argument("--per-query", type=int, default=None, help="recettes par recherche (3 par défaut)")
     commands.add_parser("check-db", help="vérifier la base maintenant (une tentative) et alerter si besoin")
     commands.add_parser("purge", help="lancer la purge nocturne maintenant")
+    commands.add_parser("daily-recipes", help="préparer les recettes du jour des comptes qui n'en ont pas encore")
     commands.add_parser("test-email", help="envoyer un e-mail de test au super-administrateur")
     args = parser.parse_args(argv)
 
@@ -95,6 +97,10 @@ def main(argv: list[str] | None = None) -> None:
             from app.maintenance import purge
 
             print("Purge : " + ", ".join(f"{n} {label}" for label, n in purge(session).items()))
+        elif args.command == "daily-recipes":
+            from app.services.daily import run_daily
+
+            print(f"Recettes du jour préparées pour {run_daily(session)} compte(s)")
         elif args.command == "import-marmiton-selection":
             from app.seed.marmiton_selection import PER_QUERY, QUERIES
             from app.services.marmiton import MarmitonClient, MarmitonError

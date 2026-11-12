@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { api, type Inventory, type Item, type MyRecipes, type ProposalQuery, type RecipeCard } from "../api";
+import { api, type DailyRecipes, type Inventory, type Item, type MyRecipes, type ProposalQuery, type RecipeCard } from "../api";
 import PlanDialog from "../components/agenda/PlanDialog";
 import RecipeCardView from "../components/recipes/RecipeCardView";
 import RecipeEditor from "../components/recipes/RecipeEditor";
@@ -36,6 +36,20 @@ export default function MealsPage() {
   const [aiCount, setAiCount] = useState(2);
   const [resultsLabel, setResultsLabel] = useState("Résultats Marmiton");
   const [error, setError] = useState<string | null>(null);
+  const [daily, setDaily] = useState<DailyRecipes | null>(null);
+  const [dailyFailed, setDailyFailed] = useState(false);
+
+  const loadDaily = useCallback(() => {
+    api
+      .dailyRecipes()
+      .then((d) => {
+        setDaily(d);
+        setDailyFailed(false);
+      })
+      .catch(() => setDailyFailed(true));
+  }, []);
+
+  useEffect(loadDaily, [loadDaily]);
 
   const loadLeftovers = useCallback((list: Inventory[]) => {
     Promise.all(list.map((i) => api.items(i.id)))
@@ -331,6 +345,8 @@ export default function MealsPage() {
           )}
           {busy && <p className="mb-4 text-sm text-stone-600 dark:text-stone-400" role="status">{busy}</p>}
 
+          <DailySection daily={daily} failed={dailyFailed} onOpen={setOpenRecipe} />
+
           {searchResults && (
             <section className="mb-8">
               <div className="mb-2 flex items-center justify-between">
@@ -372,6 +388,7 @@ export default function MealsPage() {
           initialServings={servings}
           onChanged={() => {
             load();
+            loadDaily();
             setRefreshKey((k) => k + 1);
           }}
           onClose={() => setOpenRecipe(null)}
@@ -472,5 +489,35 @@ function CardGrid({ cards, onOpen }: { cards: RecipeCard[]; onOpen: (id: string)
         <RecipeCardView key={card.id} card={card} onOpen={() => onOpen(card.id)} />
       ))}
     </div>
+  );
+}
+
+function DailySection({ daily, failed, onOpen }: { daily: DailyRecipes | null; failed: boolean; onOpen: (id: string) => void }) {
+  if (failed || (daily && daily.recipes.length === 0)) return null;
+  return (
+    <section className="mb-8">
+      <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-stone-500">
+        Recettes du jour
+        {daily && <span className="ml-2 font-normal normal-case tracking-normal">· {new Date(daily.day + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}</span>}
+      </h2>
+      {daily === null ? (
+        <Loading label="Choix des recettes du jour…" />
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {daily.recipes.map(({ recipe, reasons }) => (
+            <div key={recipe.id} className="flex flex-col gap-2">
+              <RecipeCardView card={recipe} onOpen={() => onOpen(recipe.id)} />
+              <ul className="flex flex-wrap gap-1.5 text-xs">
+                {reasons.map((r) => (
+                  <li key={r} className="rounded-full bg-brand-50 px-2 py-0.5 text-brand-700 dark:bg-stone-800 dark:text-brand-500">
+                    {r}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }

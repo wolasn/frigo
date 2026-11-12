@@ -1,7 +1,8 @@
 """Tâches planifiées dans le processus de l'application (un seul processus uvicorn).
 
 - 6 h 00 : vérification de la base (garde aussi le projet Supabase actif) ;
-- 3 h 30 : purges (historique d'un mois, analyses photo, sessions expirées…).
+- 3 h 30 : purges (historique d'un mois, analyses photo, sessions expirées…) ;
+- 4 h 00 : recettes du jour (trois par compte actif).
 Les sauvegardes tournent dans le conteneur « backup » (pg_dump 17), pas ici.
 """
 
@@ -36,6 +37,17 @@ def _purge() -> None:
         logger.exception("Purge impossible")
 
 
+def _daily_recipes() -> None:
+    from app.db import get_engine
+    from app.services.daily import run_daily
+
+    try:
+        with Session(get_engine()) as session:
+            logger.info("Recettes du jour préparées pour %s compte(s)", run_daily(session))
+    except Exception:  # noqa: BLE001 - préparées à l'ouverture de l'onglet Repas à défaut
+        logger.exception("Recettes du jour impossibles")
+
+
 def start() -> None:
     global _scheduler
     if os.environ.get("SCHEDULER_ENABLED", "true").lower() != "true" or _scheduler is not None:
@@ -46,6 +58,8 @@ def start() -> None:
                        id="check_database", misfire_grace_time=6 * 3600, coalesce=True)
     _scheduler.add_job(_purge, CronTrigger(hour=3, minute=30, timezone=APP_TIMEZONE),
                        id="purge", misfire_grace_time=6 * 3600, coalesce=True)
+    _scheduler.add_job(_daily_recipes, CronTrigger(hour=4, minute=0, timezone=APP_TIMEZONE),
+                       id="daily_recipes", misfire_grace_time=6 * 3600, coalesce=True)
     _scheduler.start()
     logger.info("Tâches planifiées démarrées")
 

@@ -197,6 +197,35 @@ def list_favorites(session: DbSession, user: CurrentUser) -> list[RecipeCard]:
     return _cards_for(session, user, [m.recipe_id for m in metas])
 
 
+class DailyCard(BaseModel):
+    recipe: RecipeCard
+    origin: str
+    reasons: list[str]
+
+
+class DailyOut(BaseModel):
+    day: date
+    recipes: list[DailyCard]
+
+
+@router.get("/recipes/daily")
+def daily_recipes(session: DbSession, user: CurrentUser) -> DailyOut:
+    """Trois recettes du jour : de saison, différentes des jours précédents."""
+    from app.services.daily import reasons, todays
+
+    rows = todays(session, user)
+    by_id = {r.recipe_id: r for r in rows}
+    recipes = list(session.scalars(select(Recipe).where(Recipe.id.in_(by_id), visible_recipes_clause(user))))
+    recipes.sort(key=lambda r: by_id[r.id].position)
+    options = _options(session, user, None, None, None, None, None, True, None)
+    cards = [
+        DailyCard(recipe=RecipeCard(**_card(e, options.servings)), origin=by_id[e.recipe.id].origin,
+                  reasons=reasons(e, today(), by_id[e.recipe.id].origin))
+        for e in evaluate_recipes(session, user, options, recipes)
+    ]
+    return DailyOut(day=today(), recipes=cards)
+
+
 @router.get("/recipes/{recipe_id}")
 def recipe_detail(
     recipe_id: uuid.UUID,
