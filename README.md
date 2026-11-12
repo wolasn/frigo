@@ -142,6 +142,20 @@ de l'onglet pour un compte qui n'en a pas encore) :
 Calendrier des saisons : `backend/app/services/season.py`. Préparer maintenant :
 `docker compose exec app python -m app.cli daily-recipes`.
 
+### Agent IA des recettes du jour
+
+Juste après ce choix automatique, un agent IA (Claude, boucle d'outils dans `backend/app/services/daily_agent.py`)
+revoit le menu de chaque compte actif. Ses outils lisent la base (profil, inventaire, historique, menu actuel),
+cherchent des recettes dans la base et sur Marmiton (3 recherches au plus), puis il garde ou remplace les trois
+recettes, avec une raison pour chacune et un court message affiché dans l'onglet Repas. L'application garantit
+le reste : il ne peut choisir que des recettes acceptables (régime, allergies, ustensiles, pas de répétition,
+pas de dessert) ; s'il échoue ou ne conclut pas, le choix automatique reste.
+
+Réglages dans Préférences → Administration : activation, modèle, consignes (le « prompt » de l'agent ; la
+partie fixe est dans `daily_agent_prompt.py`), bouton pour le lancer sur son compte et journal des passages.
+Coût suivi dans « coûts de l'IA » (colonne Agent) : environ 0,20 $ par compte et par jour avec Opus 5.5.
+Lancer à la main : `docker compose exec app python -m app.cli daily-agent [identifiant]`.
+
 ## Recettes Marmiton
 
 Les recettes sont lues sur Marmiton (données structurées des fiches), au plus une requête toutes les 1,5 s,
@@ -166,7 +180,7 @@ Toujours relire une migration générée avant de l'appliquer.
 | --- | --- | --- |
 | Chaque jour à 6 h | Vérification de la base (3 essais), e-mail au super-administrateur si elle est bloquée, puis au retour | Conteneur `app` |
 | Chaque nuit à 3 h 30 | Purge : retraits de plus d'un mois, articles archivés, analyses photo de plus de 30 jours, sessions expirées | Conteneur `app` |
-| Chaque matin à 4 h | Recettes du jour des comptes connectés ces 30 derniers jours | Conteneur `app` |
+| Chaque matin à 4 h | Recettes du jour des comptes connectés ces 30 derniers jours, puis passage de l'agent IA | Conteneur `app` |
 | Lundi et jeudi à 3 h | Sauvegarde compressée (`pg_dump` 17, schéma `public`) dans `./backups`, les 2 plus récentes gardées | Conteneur `backup` |
 
 Commandes utiles :

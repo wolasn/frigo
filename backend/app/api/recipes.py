@@ -201,17 +201,20 @@ class DailyCard(BaseModel):
     recipe: RecipeCard
     origin: str
     reasons: list[str]
+    note: str | None = None  # raison donnée par l'agent IA
 
 
 class DailyOut(BaseModel):
     day: date
     recipes: list[DailyCard]
+    agent_message: str | None = None
 
 
 @router.get("/recipes/daily")
 def daily_recipes(session: DbSession, user: CurrentUser) -> DailyOut:
     """Trois recettes du jour : de saison, différentes des jours précédents."""
     from app.services.daily import reasons, todays
+    from app.services.daily_agent import latest_message
 
     rows = todays(session, user)
     by_id = {r.recipe_id: r for r in rows}
@@ -220,10 +223,10 @@ def daily_recipes(session: DbSession, user: CurrentUser) -> DailyOut:
     options = _options(session, user, None, None, None, None, None, True, None)
     cards = [
         DailyCard(recipe=RecipeCard(**_card(e, options.servings)), origin=by_id[e.recipe.id].origin,
-                  reasons=reasons(e, today(), by_id[e.recipe.id].origin))
+                  reasons=reasons(e, today(), by_id[e.recipe.id].origin), note=by_id[e.recipe.id].note)
         for e in evaluate_recipes(session, user, options, recipes)
     ]
-    return DailyOut(day=today(), recipes=cards)
+    return DailyOut(day=today(), recipes=cards, agent_message=latest_message(session, user, today()))
 
 
 @router.get("/recipes/{recipe_id}")

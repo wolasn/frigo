@@ -171,18 +171,10 @@ def _client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=key, timeout=180.0, max_retries=2)
 
 
-def generate(req: GenerationRequest, client: Any | None = None, on_usage: Any | None = None) -> list[GeneratedRecipe]:
-    """Appelle Claude et renvoie les recettes validées. Lève AiError avec un message en français."""
-    client = client or _client()
+def call_claude(client: Any, model: str, **params: Any) -> Any:
+    """Un appel à Claude ; les erreurs de l'API deviennent des AiError avec un message en français."""
     try:
-        response = create_message(
-            client,
-            req.model,
-            max_tokens=MAX_TOKENS,
-            system=SYSTEM_PROMPT,
-            output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": RECIPE_SCHEMA}},
-            messages=[{"role": "user", "content": build_prompt(req)}],
-        )
+        return create_message(client, model, **params)
     except anthropic.AuthenticationError as error:
         # 401 : clé expirée, révoquée, supprimée ou mal recopiée — l'API ne distingue pas ces cas.
         logger.error("Clé d'API Claude refusée : %s", error.message)
@@ -206,6 +198,17 @@ def generate(req: GenerationRequest, client: Any | None = None, on_usage: Any | 
     except anthropic.APIConnectionError:
         raise AiError("Impossible de joindre l'API Claude.", "temporary") from None
 
+
+def generate(req: GenerationRequest, client: Any | None = None, on_usage: Any | None = None) -> list[GeneratedRecipe]:
+    """Appelle Claude et renvoie les recettes validées. Lève AiError avec un message en français."""
+    response = call_claude(
+        client or _client(),
+        req.model,
+        max_tokens=MAX_TOKENS,
+        system=SYSTEM_PROMPT,
+        output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": RECIPE_SCHEMA}},
+        messages=[{"role": "user", "content": build_prompt(req)}],
+    )
     logger.info("Génération IA : modèle %s, %s jetons en entrée, %s en sortie, requête %s",
                 response.model, response.usage.input_tokens, response.usage.output_tokens,
                 getattr(response, "_request_id", None))

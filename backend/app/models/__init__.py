@@ -22,7 +22,7 @@ from app.models.inventory import (
     StorageLocation,
 )
 from app.models.photo import PhotoScan, PhotoScanLine
-from app.models.planning import DailyRecipe, Notification, PlannedMeal, Reservation, ShoppingListItem, ShoppingListItemMeal
+from app.models.planning import DailyAgentRun, DailyRecipe, Notification, PlannedMeal, Reservation, ShoppingListItem, ShoppingListItemMeal
 from app.models.recipes import (
     MarmitonSearchCache,
     Recipe,
@@ -38,7 +38,7 @@ from app.models.recipes import (
 __all__ = [
     "AiUsage", "AppSetting", "AuthSession", "Base", "Food", "FoodAlias", "FoodCategory", "FoodShelfLife", "Inventory",
     "InventoryInvitation", "InventoryItem", "InventoryMember", "InventoryRemoval", "LocationShelfLife", "MarmitonSearchCache",
-    "DailyRecipe", "Notification", "PhotoScan", "PhotoScanLine", "PlannedMeal", "Recipe", "RecipeIngredient", "RecipeShare",
+    "DailyAgentRun", "DailyRecipe", "Notification", "PhotoScan", "PhotoScanLine", "PlannedMeal", "Recipe", "RecipeIngredient", "RecipeShare",
     "RecipeStep", "RecipeUtensil", "Reservation", "ShoppingListItem", "SignupInvitation", "ShoppingListItemMeal", "StorageLocation",
     "UnitConversion", "User", "UserCategoryThreshold", "UserExcludedFood", "UserInfiniteFood", "UserPreferences",
     "UserRecipeMeta", "UserUtensil", "Utensil",

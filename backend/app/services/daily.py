@@ -117,17 +117,21 @@ def _options(session: Session, user: User, day) -> Options:
     )
 
 
-def rank(session: Session, user: User, day, fresh: dict[uuid.UUID, str] | None = None) -> list[Pick]:
-    """Les meilleures recettes du jour pour cet utilisateur, déjà variées entre elles (au plus PICKS)."""
+def candidates(session: Session, user: User, day, fresh: dict[uuid.UUID, str] | None = None,
+               only: set[uuid.UUID] | None = None) -> list[Pick]:
+    """Toutes les recettes acceptables aujourd'hui pour cet utilisateur, les mieux notées d'abord.
+    `only` : se limiter à ces recettes."""
     fresh = fresh or {}
     seasonal = _food_ids(session, season.in_season(day, fruits=False))
     off_season = set(_food_ids(session, season.out_of_season(day)))
     excluded = _excluded(session, user, day)
     rng = random.Random(f"{user.id}:{day.isoformat()}")  # même tirage toute la journée
 
-    candidates: list[Pick] = []
+    picks: list[Pick] = []
     for evaluation in propose(session, user, _options(session, user, day), limit=10**6):
         recipe = evaluation.recipe
+        if only is not None and recipe.id not in only:
+            continue
         if recipe.id in excluded or not looks_like_a_meal(recipe.title):
             continue
         foods = {i.food_id for i in evaluation.ingredients if i.food_id and i.status != "infinite"}
@@ -144,15 +148,21 @@ def rank(session: Session, user: User, day, fresh: dict[uuid.UUID, str] | None =
             + (1 if recipe.id in fresh else 0)  # une nouveauté du jour passe devant à égalité
             + rng.uniform(0, 2)
         )
-        candidates.append(Pick(evaluation, score, sorted(hits), "marmiton" if recipe.id in fresh else "base",
-                               fresh.get(recipe.id)))
+        picks.append(Pick(evaluation, score, sorted(hits), "marmiton" if recipe.id in fresh else "base",
+                          fresh.get(recipe.id)))
+    picks.sort(key=lambda p: -p.score)
+    return picks
 
+
+def rank(session: Session, user: User, day, fresh: dict[uuid.UUID, str] | None = None) -> list[Pick]:
+    """Les meilleures recettes du jour pour cet utilisateur, déjà variées entre elles (au plus PICKS)."""
+    candidates_left = candidates(session, user, day, fresh)
     picks: list[Pick] = []
-    while candidates and len(picks) < PICKS:
+    while candidates_left and len(picks) < PICKS:
         # Variété : chaque produit de saison déjà au menu du jour rend les autres recettes qui l'utilisent moins prioritaires.
         used = {name for p in picks for name in p.seasonal}
-        best = max(candidates, key=lambda p: p.score - 2.5 * len(used & set(p.seasonal)))
-        candidates.remove(best)
+        best = max(candidates_left, key=lambda p: p.score - 2.5 * len(used & set(p.seasonal)))
+        candidates_left.remove(best)
         picks.append(best)
     return picks
 
@@ -253,4 +263,6 @@ def reasons(pick_evaluation: Evaluation, day, origin: str) -> list[str]:
         out.append("Nouvelle sur Marmiton")
     elif origin == "ia":
         out.append("Inventée par l'IA")
+    elif origin == "agent":
+        out.append("Choisie par l'agent IA")
     return out

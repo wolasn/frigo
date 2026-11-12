@@ -137,8 +137,33 @@ class DailyRecipe(Base):
     recipe_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("recipes.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    origin: Mapped[str] = mapped_column(Text, nullable=False)  # base, marmiton ou ia
+    origin: Mapped[str] = mapped_column(Text, nullable=False)  # base, marmiton, ia ou agent
     query: Mapped[str | None] = mapped_column(Text)  # recherche Marmiton de saison qui l'a apportée
+    note: Mapped[str | None] = mapped_column(Text)  # pourquoi l'agent IA l'a choisie
     created_at: Mapped[datetime] = created_at_column()
 
-    __table_args__ = (CheckConstraint("origin in ('base', 'marmiton', 'ia')", name="origin"),)
+    __table_args__ = (CheckConstraint("origin in ('base', 'marmiton', 'ia', 'agent')", name="origin"),)
+
+
+class DailyAgentRun(Base):
+    """Journal de l'agent IA des recettes du jour : un passage par compte et par lancement."""
+
+    __tablename__ = "daily_agent_runs"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    day: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)  # changed, kept, error
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    message: Mapped[str | None] = mapped_column(Text)  # le mot de l'agent, affiché au-dessus des recettes
+    steps: Mapped[Any] = mapped_column(JSONB, nullable=False, server_default="[]")  # outils appelés, dans l'ordre
+    error: Mapped[str | None] = mapped_column(Text)
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(10, 6), nullable=False, server_default="0")
+    created_at: Mapped[datetime] = created_at_column()
+
+    __table_args__ = (
+        CheckConstraint("status in ('changed', 'kept', 'error')", name="status"),
+        Index("ix_daily_agent_runs_user_day", "user_id", "day"),
+    )

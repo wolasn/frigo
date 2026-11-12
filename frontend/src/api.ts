@@ -93,9 +93,9 @@ export type ScanLineEdit = {
 };
 
 export type UsageTotals = { calls: number; input_tokens: number; output_tokens: number; cost_usd: number };
-export type UserUsage = UsageTotals & { user_id: string | null; username: string; display_name: string | null; recipes: UsageTotals; photos: UsageTotals };
+export type UserUsage = UsageTotals & { user_id: string | null; username: string; display_name: string | null; recipes: UsageTotals; photos: UsageTotals; agent: UsageTotals };
 export type AiUsage = { month: string | null; total: UsageTotals; users: UserUsage[] };
-export type UsageCall = { created_at: string; kind: "recipe" | "photo"; model: string; input_tokens: number; output_tokens: number; cost_usd: number };
+export type UsageCall = { created_at: string; kind: "recipe" | "photo" | "agent"; model: string; input_tokens: number; output_tokens: number; cost_usd: number };
 
 export type AdminSettings = {
   photo_engine: "claude" | "local";
@@ -103,6 +103,23 @@ export type AdminSettings = {
   photo_local_model: string;
   photo_local_fallback: boolean;
   ai_recipe_model: "claude-opus-5-5" | "claude-sonnet-5-5" | "claude-haiku-5-5";
+  daily_agent_enabled: boolean;
+  daily_agent_model: "claude-opus-5-5" | "claude-sonnet-5-5" | "claude-haiku-5-5";
+  daily_agent_prompt: string;
+  daily_agent_default_prompt: string;
+};
+
+export type AgentRun = {
+  id: string;
+  created_at: string;
+  day: string;
+  username: string;
+  status: "changed" | "kept" | "error";
+  model: string;
+  message: string | null;
+  error: string | null;
+  cost_usd: number;
+  steps: { outil: string; entree: Record<string, unknown> }[];
 };
 
 export type RemovalReason = "consumed" | "discarded" | "given" | "cooked" | "other";
@@ -171,7 +188,8 @@ export type RecipeCard = {
 
 export type DailyRecipes = {
   day: string;
-  recipes: { recipe: RecipeCard; origin: "base" | "marmiton" | "ia"; reasons: string[] }[];
+  recipes: { recipe: RecipeCard; origin: "base" | "marmiton" | "ia" | "agent"; reasons: string[]; note: string | null }[];
+  agent_message: string | null;
 };
 
 export type IngredientStatus = "ok" | "partial" | "missing" | "unknown" | "seasoning" | "infinite";
@@ -419,6 +437,8 @@ export const api = {
     request<UsageCall[]>("GET", `/api/admin/ai-usage/${encodeURIComponent(userKey)}?${query({ month })}`),
   adminSettings: () => request<AdminSettings>("GET", "/api/admin/settings"),
   updateAdminSettings: (body: Partial<AdminSettings>) => request<AdminSettings>("PATCH", "/api/admin/settings", body),
+  runDailyAgent: () => request<AgentRun>("POST", "/api/admin/daily-agent/run"),
+  dailyAgentRuns: () => request<AgentRun[]>("GET", "/api/admin/daily-agent/runs"),
   searchFoods: (q: string, categoryId?: string) =>
     request<Food[]>("GET", `/api/foods?${query({ q, category_id: categoryId || undefined, limit: categoryId ? 100 : undefined })}`),
   createFood: (name: string, category_id: string, reference_unit: Food["reference_unit"]) =>

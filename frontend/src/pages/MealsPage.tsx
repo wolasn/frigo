@@ -500,13 +500,19 @@ function DailySection({ daily, failed, onOpen }: { daily: DailyRecipes | null; f
         Recettes du jour
         {daily && <span className="ml-2 font-normal normal-case tracking-normal">· {new Date(daily.day + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}</span>}
       </h2>
+      {daily?.agent_message && (
+        <p className="mb-3 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-sm text-violet-900 dark:border-violet-900 dark:bg-stone-900 dark:text-violet-300">
+          {daily.agent_message}
+        </p>
+      )}
       {daily === null ? (
         <Loading label="Choix des recettes du jour…" />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {daily.recipes.map(({ recipe, reasons }) => (
+          {daily.recipes.map(({ recipe, reasons, note }) => (
             <div key={recipe.id} className="flex flex-col gap-2">
               <RecipeCardView card={recipe} onOpen={() => onOpen(recipe.id)} />
+              {note && <p className="text-sm text-stone-700 dark:text-stone-300">{note}</p>}
               <ul className="flex flex-wrap gap-1.5 text-xs">
                 {reasons.map((r) => (
                   <li key={r} className="rounded-full bg-brand-50 px-2 py-0.5 text-brand-700 dark:bg-stone-800 dark:text-brand-500">

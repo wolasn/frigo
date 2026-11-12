@@ -16,6 +16,7 @@ from app.db import check_database
 from app.models.enums import UserRole
 from app.monitoring import read_status, run_check
 from app.secrets import read_secret
+from app.services.daily_agent_prompt import DEFAULT_INSTRUCTIONS as DEFAULT_AGENT_INSTRUCTIONS
 
 router = APIRouter(prefix="/api/admin", tags=["administration"])
 
@@ -65,6 +66,10 @@ class SettingsOut(BaseModel):
     photo_local_model: str
     photo_local_fallback: bool
     ai_recipe_model: Literal["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
+    daily_agent_enabled: bool
+    daily_agent_model: Literal["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
+    daily_agent_prompt: str
+    daily_agent_default_prompt: str = DEFAULT_AGENT_INSTRUCTIONS
 
 
 class SettingsIn(BaseModel):
@@ -73,12 +78,16 @@ class SettingsIn(BaseModel):
     photo_local_model: str | None = Field(default=None, min_length=1, max_length=100)
     photo_local_fallback: bool | None = None
     ai_recipe_model: Literal["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"] | None = None
+    daily_agent_enabled: bool | None = None
+    daily_agent_model: Literal["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"] | None = None
+    daily_agent_prompt: str | None = Field(default=None, min_length=10, max_length=4000)
 
 
 def _settings(session) -> SettingsOut:
     from app.services.settings import get_setting
 
-    return SettingsOut(**{key: get_setting(session, key) for key in SettingsOut.model_fields})
+    return SettingsOut(**{key: get_setting(session, key) for key in SettingsOut.model_fields
+                          if key != "daily_agent_default_prompt"})
 
 
 @router.get("/settings")
@@ -115,6 +124,7 @@ class UserUsage(UsageTotals):
     display_name: str | None
     recipes: UsageTotals
     photos: UsageTotals
+    agent: UsageTotals
 
 
 class UsageOut(BaseModel):
@@ -171,13 +181,14 @@ def ai_usage(session: DbSession, user: CurrentUser, month: str | None = None) ->
     for user_id, username, kind, calls, tokens_in, tokens_out, cost in rows:
         key = str(user_id) if user_id else f"supprimé:{username}"
         by_user.setdefault(key, {"user_id": str(user_id) if user_id else None, "username": username,
-                                 "display_name": names.get(user_id), "recipe": [], "photo": []})
-        by_user[key][kind].append((calls, tokens_in or 0, tokens_out or 0, cost or 0))
+                                 "display_name": names.get(user_id), "recipe": [], "photo": [], "agent": []})
+        by_user[key].setdefault(kind, []).append((calls, tokens_in or 0, tokens_out or 0, cost or 0))
     users = []
     for entry in by_user.values():
-        both = entry["recipe"] + entry["photo"]
+        every = entry["recipe"] + entry["photo"] + entry["agent"]
         users.append(UserUsage(user_id=entry["user_id"], username=entry["username"], display_name=entry["display_name"],
-                               recipes=_totals(entry["recipe"]), photos=_totals(entry["photo"]), **_totals(both).model_dump()))
+                               recipes=_totals(entry["recipe"]), photos=_totals(entry["photo"]),
+                               agent=_totals(entry["agent"]), **_totals(every).model_dump()))
     users.sort(key=lambda u: -u.cost_usd)
     all_rows = [(r[3], r[4] or 0, r[5] or 0, r[6] or 0) for r in rows]
     return UsageOut(month=month, total=_totals(all_rows), users=users)
@@ -203,3 +214,49 @@ def ai_usage_detail(user_id: str, session: DbSession, user: CurrentUser, month: 
     calls = session.scalars(select(AiUsage).where(who, _period(month)).order_by(AiUsage.created_at.desc()).limit(500))
     return [UsageCall(created_at=c.created_at.isoformat(timespec="seconds"), kind=c.kind, model=c.model,
                       input_tokens=c.input_tokens, output_tokens=c.output_tokens, cost_usd=float(c.cost_usd)) for c in calls]
+
+
+# ---------- Agent des recettes du jour ----------
+
+
+class AgentRunOut(BaseModel):
+    id: str
+    created_at: str
+    day: str
+    username: str
+    status: str
+    model: str
+    message: str | None
+    error: str | None
+    cost_usd: float
+    steps: list[dict]
+
+
+def _run_out(run, username: str) -> AgentRunOut:
+    return AgentRunOut(id=str(run.id), created_at=run.created_at.isoformat(timespec="seconds"), day=run.day.isoformat(),
+                       username=username, status=run.status, model=run.model, message=run.message, error=run.error,
+                       cost_usd=float(run.cost_usd), steps=run.steps)
+
+
+@router.post("/daily-agent/run")
+def run_daily_agent(session: DbSession, user: CurrentUser) -> AgentRunOut:
+    """Lance l'agent maintenant pour son propre compte (jusqu'à deux minutes), pour essayer des consignes."""
+    from app.services.daily_agent import run_agent
+
+    _require_super_admin(user)
+    run = run_agent(session, user)
+    session.refresh(run)
+    return _run_out(run, user.username)
+
+
+@router.get("/daily-agent/runs")
+def daily_agent_runs(session: DbSession, user: CurrentUser) -> list[AgentRunOut]:
+    """Journal de l'agent : les 30 derniers passages, tous comptes."""
+    from sqlalchemy import select
+
+    from app.models import DailyAgentRun, User
+
+    _require_super_admin(user)
+    rows = session.execute(select(DailyAgentRun, User.username).join(User, User.id == DailyAgentRun.user_id)
+                           .order_by(DailyAgentRun.created_at.desc()).limit(30)).all()
+    return [_run_out(run, username) for run, username in rows]

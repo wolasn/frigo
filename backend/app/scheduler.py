@@ -2,7 +2,7 @@
 
 - 6 h 00 : vérification de la base (garde aussi le projet Supabase actif) ;
 - 3 h 30 : purges (historique d'un mois, analyses photo, sessions expirées…) ;
-- 4 h 00 : recettes du jour (trois par compte actif).
+- 4 h 00 : recettes du jour (trois par compte actif), puis l'agent IA qui les revoit.
 Les sauvegardes tournent dans le conteneur « backup » (pg_dump 17), pas ici.
 """
 
@@ -46,6 +46,14 @@ def _daily_recipes() -> None:
             logger.info("Recettes du jour préparées pour %s compte(s)", run_daily(session))
     except Exception:  # noqa: BLE001 - préparées à l'ouverture de l'onglet Repas à défaut
         logger.exception("Recettes du jour impossibles")
+        return
+    from app.services.daily_agent import run_all
+
+    try:
+        with Session(get_engine()) as session:
+            logger.info("Agent des recettes du jour passé pour %s compte(s)", run_all(session))
+    except Exception:  # noqa: BLE001 - les recettes de l'automatisation restent en place
+        logger.exception("Agent des recettes du jour impossible")
 
 
 def start() -> None:
