@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sh agent/outils.sh *)",
+      "Read(/agent/**)",
+      "Edit(/agent/journal/**)",
+      "Write(/agent/journal/**)"
+    ]
+  }
+}

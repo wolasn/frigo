@@ -142,6 +142,19 @@ de l'onglet pour un compte qui n'en a pas encore) :
 Calendrier des saisons : `backend/app/services/season.py`. Préparer maintenant :
 `docker compose exec app python -m app.cli daily-recipes`.
 
+### Agent IA des recettes du jour (sur le PC)
+
+Un agent Claude Code du projet, `.claude/agents/recettes-du-jour.md`, revoit chaque matin le menu de chaque
+compte actif. Ses consignes (le prompt réglé à l'avance) sont dans ce fichier. Il ne tourne pas sur le serveur :
+une tâche planifiée de l'appli Claude le lance vers 7 h sur le PC (appli Claude ouverte et Docker Desktop
+démarré ; sinon il passe au prochain lancement et les recettes de l'automatisation restent en place).
+
+Ses seuls outils passent par `sh agent/outils.sh <commande>` (`comptes`, `contexte`, `chercher`, `marmiton`,
+`detail`, `definir`) : un conteneur de l'appli sur le PC, avec le code actuel du dossier `backend` et la même
+base que le serveur. `definir` n'accepte que des recettes que l'appli juge acceptables (régime, allergies,
+ustensiles, pas de dessert, pas de répétition sur 14 jours). Il écrit ce qu'il a fait dans `agent/journal/`
+(non versionné). `.claude/settings.json` n'autorise que ces commandes et l'écriture du journal.
+
 ## Recettes Marmiton
 
 Les recettes sont lues sur Marmiton (données structurées des fiches), au plus une requête toutes les 1,5 s,

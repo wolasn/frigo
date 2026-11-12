@@ -17,3 +17,6 @@ dist/
 backups/
 *.dump
 *.sql.gz
+
+# Journal de l agent des recettes du jour (noms des comptes, local au PC)
+agent/journal/
