@@ -83,6 +83,18 @@ Pour l'enrichir d'un coup (une sélection variée de recherches sur les sites, q
 docker compose exec app python -m app.cli enrich-ingredients
 ```
 
+Après un `seed-catalogue` (aliments ou synonymes ajoutés), ranger la liste : noms hors catalogue nettoyés et rapprochés
+du catalogue, doublons d'accents fusionnés :
+
+```
+docker compose exec app python -m app.cli tidy-ingredients
+```
+
+La liste à cocher montre tous les aliments du catalogue (sauf l'eau), rangés par catégorie, plus « Autres » : les noms
+hors catalogue vus dans au moins deux recettes. Mesure de novembre 2026 sur 464 recettes des trois sites : 98,4 % des
+lignes d'ingrédients tombent dans une catégorie du catalogue, 1,5 % dans « Autres ». Quelques épices et sauces n'ont
+pas d'équivalent Ciqual (`NO_CIQUAL` dans `backend/app/seed/catalogue_data.py`).
+
 ## Recherche de recettes
 
 Onglet Repas → Recherche : cocher des ingrédients (à la main ou par photo), un texte libre ou un lien de
