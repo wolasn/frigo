@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type Food, type RecipeEdit, type RecipeInput, type Utensil } from "../../api";
 import { unitLabel } from "../../format";
-import FoodPicker from "../inventory/FoodPicker";
+import FoodPicker from "../FoodPicker";
 import { ErrorMessage, Field, inputClass, Modal, primaryButton, secondaryButton, Loading } from "../ui";
 
 const EXTRA_UNITS = ["cs", "cc", "pincee"];

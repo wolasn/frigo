@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { api, type AdminSettings, type AiUsage, type Category, type UsageCall, type UserUsage, type Food, type Preferences, type User } from "../api";
+import { api, type AdminSettings, type AiUsage, type UsageCall, type UserUsage, type Food, type Preferences, type User } from "../api";
 import { ErrorMessage, Field, inputClass, primaryButton, secondaryButton, Loading } from "../components/ui";
-import CategorySelect from "../components/inventory/CategorySelect";
+import CategorySelect from "../components/CategorySelect";
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return (
@@ -10,6 +10,46 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
       {hint && <p className="mb-3 text-sm text-stone-600 dark:text-stone-400">{hint}</p>}
       <div className={hint ? "" : "mt-3"}>{children}</div>
     </section>
+  );
+}
+
+/** Recherche dans la liste des ingrédients à cocher (ceux vus dans les recettes des sites). */
+function TermSearch({ placeholder, onPick }: { placeholder: string; onPick: (name: string) => void }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<string[]>([]);
+
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setResults([]);
+      return;
+    }
+    const timer = setTimeout(() => api.ingredients(q, 8).then((t) => setResults(t.map((x) => x.name))).catch(() => setResults([])), 200);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  return (
+    <div className="relative max-w-md">
+      <input className={inputClass} placeholder={placeholder} value={query} onChange={(e) => setQuery(e.target.value)} />
+      {results.length > 0 && (
+        <ul className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-stone-200 bg-white shadow-lg dark:border-stone-700 dark:bg-stone-900">
+          {results.map((name) => (
+            <li key={name}>
+              <button
+                className="w-full px-3 py-2 text-left text-sm hover:bg-stone-50 dark:hover:bg-stone-800"
+                onClick={() => {
+                  onPick(name);
+                  setQuery("");
+                  setResults([]);
+                }}
+              >
+                {name}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -91,17 +131,14 @@ export default function PreferencesPage({ user, onUserChanged, onAccountDeleted 
   onAccountDeleted: () => void;
 }) {
   const [prefs, setPrefs] = useState<Preferences | null>(null);
-  const [categories, setCategories] = useState<Category[]>([]);
   const [displayName, setDisplayName] = useState(user.display_name);
   const [passwords, setPasswords] = useState({ current: "", next: "", confirm: "" });
-  const [newThreshold, setNewThreshold] = useState({ categoryId: "", days: "1" });
   const [deletePassword, setDeletePassword] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api.preferences().then(setPrefs).catch(() => setError("Impossible de charger tes préférences."));
-    api.categories().then(setCategories).catch(() => setCategories([]));
   }, []);
 
   async function save(action: () => Promise<Preferences>, done?: string) {
@@ -151,7 +188,6 @@ export default function PreferencesPage({ user, onUserChanged, onAccountDeleted 
 
   if (!prefs) return error ? <ErrorMessage message={error} /> : <Loading />;
 
-  const unusedCategories = categories.filter((c) => !prefs.thresholds.some((t) => t.category_id === c.id));
 
   return (
     <div className="space-y-5">
@@ -162,7 +198,7 @@ export default function PreferencesPage({ user, onUserChanged, onAccountDeleted 
       {user.role === "super_admin" && <AdminSettingsSection />}
       {user.role === "super_admin" && <AiUsageSection />}
 
-      <Section title="Repas" hint="Valeurs utilisées par défaut dans les propositions de repas.">
+      <Section title="Repas" hint="Valeurs utilisées par défaut dans la recherche et les propositions de repas.">
         <div className="grid max-w-md grid-cols-2 gap-3">
           <Field label="Régime">
             <select className={inputClass} value={prefs.diet} onChange={(e) => save(() => api.updatePreferences({ diet: e.target.value as Preferences["diet"] }))}>
@@ -184,78 +220,6 @@ export default function PreferencesPage({ user, onUserChanged, onAccountDeleted 
               }}
             />
           </Field>
-        </div>
-      </Section>
-
-      <Section title="Alertes de péremption" hint="Un aliment est signalé « expire bientôt » quand il lui reste ce nombre de jours ou moins.">
-        <div className="max-w-xs">
-          <Field label="Seuil général (jours)">
-            <input
-              type="number"
-              min={0}
-              max={60}
-              className={inputClass}
-              defaultValue={prefs.expiring_soon_days}
-              onBlur={(e) => {
-                const value = Math.min(60, Math.max(0, Number(e.target.value) || 0));
-                if (value !== prefs.expiring_soon_days) save(() => api.updatePreferences({ expiring_soon_days: value }), "Seuil enregistré.");
-              }}
-            />
-          </Field>
-        </div>
-        <p className="mb-2 mt-4 text-sm font-medium">Seuils par catégorie</p>
-        <ul className="mb-3 space-y-1.5">
-          {prefs.thresholds.map((t) => (
-            <li key={t.category_id} className="flex items-center gap-3 text-sm">
-              <span className="w-48">{t.category_name}</span>
-              <input
-                type="number"
-                min={0}
-                max={60}
-                defaultValue={t.days}
-                className={inputClass + " w-20 py-1"}
-                onBlur={(e) => {
-                  const value = Math.min(60, Math.max(0, Number(e.target.value) || 0));
-                  if (value !== t.days) save(() => api.setThreshold(t.category_id, value));
-                }}
-                aria-label={`Jours pour ${t.category_name}`}
-              />
-              jours
-              <button className="text-stone-500 hover:text-red-600" onClick={() => save(() => api.removeThreshold(t.category_id))}>
-                Retirer
-              </button>
-            </li>
-          ))}
-        </ul>
-        <div className="flex max-w-md gap-2">
-          <select className={inputClass} value={newThreshold.categoryId} onChange={(e) => setNewThreshold({ ...newThreshold, categoryId: e.target.value })}>
-            <option value="">Ajouter une catégorie…</option>
-            {unusedCategories.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-          <input
-            type="number"
-            min={0}
-            max={60}
-            className={inputClass + " w-20"}
-            value={newThreshold.days}
-            onChange={(e) => setNewThreshold({ ...newThreshold, days: e.target.value })}
-            aria-label="Jours"
-          />
-          <button
-            className={secondaryButton}
-            disabled={!newThreshold.categoryId}
-            onClick={() =>
-              save(() => api.setThreshold(newThreshold.categoryId, Math.min(60, Math.max(0, Number(newThreshold.days) || 0)))).then(() =>
-                setNewThreshold({ categoryId: "", days: "1" }),
-              )
-            }
-          >
-            Ajouter
-          </button>
         </div>
       </Section>
 
@@ -284,22 +248,38 @@ export default function PreferencesPage({ user, onUserChanged, onAccountDeleted 
         <FoodSearch placeholder="Ajouter un aliment (ex. arachide)" onPick={(food) => save(() => api.setExclusion(food.id, "dislike"))} />
       </Section>
 
-      <Section title="Toujours disponible" hint="Ces basiques ne sont jamais comptés comme manquants ni ajoutés à la liste de courses.">
+      <Section
+        title="Ingrédients toujours tolérés"
+        hint="Avec « Uniquement ces ingrédients » dans la recherche, ces ingrédients ne comptent pas : une recette qui en demande reste proposée."
+      >
         <div className="mb-3 flex flex-wrap gap-1.5">
-          {prefs.basics.map((b) => (
-            <span key={b.food_id} className="inline-flex items-center gap-1 rounded-full bg-stone-100 px-3 py-1 text-sm dark:bg-stone-800">
-              {b.name}
-              {b.removable ? (
-                <button aria-label={`Retirer ${b.name}`} className="text-stone-400 hover:text-red-600" onClick={() => save(() => api.removeBasic(b.food_id))}>
-                  ×
-                </button>
-              ) : (
-                <span className="text-xs text-stone-500">(pour tous)</span>
-              )}
+          {prefs.tolerated_ingredients.length === 0 && <span className="text-sm text-stone-500">Aucun.</span>}
+          {prefs.tolerated_ingredients.map((name) => (
+            <span key={name} className="inline-flex items-center gap-1 rounded-full bg-stone-100 px-3 py-1 text-sm dark:bg-stone-800">
+              {name}
+              <button
+                aria-label={`Retirer ${name}`}
+                className="text-stone-400 hover:text-red-600"
+                onClick={() => save(() => api.updatePreferences({ tolerated_ingredients: prefs.tolerated_ingredients.filter((n) => n !== name) }))}
+              >
+                ×
+              </button>
             </span>
           ))}
         </div>
-        <FoodSearch placeholder="Ajouter un basique (ex. sel, poivre, huile)" onPick={(food) => save(() => api.addBasic(food.id))} />
+        <TermSearch
+          placeholder="Ajouter un ingrédient (ex. beurre, ail)"
+          onPick={(name) =>
+            !prefs.tolerated_ingredients.includes(name) &&
+            save(() => api.updatePreferences({ tolerated_ingredients: [...prefs.tolerated_ingredients, name] }))
+          }
+        />
+        <button
+          className="mt-2 text-sm text-stone-500 hover:underline"
+          onClick={() => save(() => api.updatePreferences({ tolerated_ingredients: prefs.default_tolerated_ingredients }), "Liste de départ rétablie.")}
+        >
+          Revenir à la liste de départ ({prefs.default_tolerated_ingredients.join(", ")})
+        </button>
       </Section>
 
       <Section title="Mon compte">

@@ -1,5 +1,3 @@
-import type { Item, RemovalReason, StorageType } from "./api";
-
 const UNIT_LABELS: Record<string, [string, string]> = {
   g: ["g", "g"],
   kg: ["kg", "kg"],
@@ -30,41 +28,3 @@ export function isoToday(): string {
   const now = new Date();
   return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 }
-
-export function expiryText(item: Item): string {
-  const d = item.days_left;
-  switch (item.status) {
-    case "expired":
-      return d === -1 ? "Périmé depuis hier" : `Périmé depuis ${-d} j`;
-    case "best_before_passed":
-      return "DDM dépassée : à vérifier";
-    case "soon":
-      return d === 0 ? "Expire aujourd'hui" : d === 1 ? "Expire demain" : `Expire dans ${d} j`;
-    default:
-      return `Jusqu'au ${formatDate(item.expires_on)}`;
-  }
-}
-
-export const STATUS_STYLES: Record<Item["status"], string> = {
-  expired: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300",
-  soon: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
-  best_before_passed: "bg-yellow-50 text-yellow-800 dark:bg-yellow-950 dark:text-yellow-300",
-  ok: "bg-stone-100 text-stone-600 dark:bg-stone-800 dark:text-stone-300",
-};
-
-export const REASON_LABELS: Record<RemovalReason, string> = {
-  consumed: "Consommé",
-  discarded: "Jeté",
-  given: "Donné",
-  cooked: "Cuisiné",
-  other: "Autre",
-};
-
-export const STORAGE_LABELS: Record<StorageType, string> = {
-  fridge: "Réfrigérateur",
-  freezer: "Congélateur",
-  pantry: "Placard",
-  spice_rack: "Épices",
-  fruit_bowl: "Corbeille à fruits",
-  other: "Autre",
-};

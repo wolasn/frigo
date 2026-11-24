@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, type Category, type Food } from "../../api";
-import { inputClass, primaryButton, secondaryButton, ErrorMessage, Field } from "../ui";
+import { api, type Category, type Food } from "../api";
+import { inputClass, primaryButton, secondaryButton, ErrorMessage, Field } from "./ui";
 import CategorySelect from "./CategorySelect";
 
 const REFERENCE_UNITS: { value: Food["reference_unit"]; label: string }[] = [

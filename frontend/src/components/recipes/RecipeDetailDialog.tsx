@@ -1,32 +1,29 @@
 import { useEffect, useState } from "react";
-import { api, type IngredientStatus, type RecipeDetail } from "../../api";
-import { formatDate } from "../../format";
+import { api, type RecipeCard, type RecipeDetail } from "../../api";
 import { ErrorMessage, inputClass, Modal, primaryButton, secondaryButton, Loading } from "../ui";
 import PlanDialog from "../agenda/PlanDialog";
 import RecipeEditor from "./RecipeEditor";
 import ShareRecipeDialog from "./ShareRecipeDialog";
 import { DIFFICULTY_LABELS, HealthBadge, SourceBadge } from "./RecipeCardView";
 
-const STATUS: Record<IngredientStatus, { label: string; style: string }> = {
-  ok: { label: "En stock", style: "text-brand-700 dark:text-brand-500" },
-  infinite: { label: "Toujours dispo", style: "text-brand-700 dark:text-brand-500" },
-  partial: { label: "Pas assez", style: "text-amber-700 dark:text-amber-400" },
-  missing: { label: "À acheter", style: "text-red-700 dark:text-red-400" },
-  unknown: { label: "Non reconnu", style: "text-stone-500" },
-  seasoning: { label: "À vérifier", style: "text-stone-500" },
-};
-
 export default function RecipeDetailDialog({
   recipeId,
   initialServings,
+  wanted = [],
+  chooseLabel,
+  onChoose,
   onChanged,
   onClose,
 }: {
-  recipeId: string;
+  recipeId: string; // référence : id en base, adresse web ou « ai:… »
   initialServings: number;
+  wanted?: string[]; // ingrédients cochés, mis en évidence
+  chooseLabel?: string; // ouverte depuis un moment de l'agenda : bouton pour le choisir
+  onChoose?: (recipe: RecipeCard, servings: number) => void;
   onChanged: () => void;
   onClose: () => void;
 }) {
+  const [ref, setRef] = useState(recipeId); // devient l'id en base quand la recette est gardée
   const [servings, setServings] = useState(initialServings);
   const [recipe, setRecipe] = useState<RecipeDetail | null>(null);
   const [comment, setComment] = useState("");
@@ -38,7 +35,7 @@ export default function RecipeDetailDialog({
   async function copy() {
     setError(null);
     try {
-      const created = await api.copyRecipe(recipeId);
+      const created = await api.copyRecipe(ref);
       onChanged();
       setEditing(created.id);
     } catch (err) {
@@ -49,7 +46,7 @@ export default function RecipeDetailDialog({
   async function remove() {
     if (!window.confirm("Supprimer définitivement cette recette ?")) return;
     try {
-      await api.deleteRecipe(recipeId);
+      await api.deleteRecipe(ref);
       onChanged();
       onClose();
     } catch (err) {
@@ -59,19 +56,21 @@ export default function RecipeDetailDialog({
 
   useEffect(() => {
     api
-      .recipe(recipeId, servings)
+      .recipe(ref, servings, wanted)
       .then((r) => {
         setRecipe(r);
         setComment(r.comment ?? "");
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Recette indisponible."));
-  }, [recipeId, servings]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ref, servings]);
 
   async function update(body: Parameters<typeof api.updateMeta>[1]) {
     setError(null);
     try {
-      const card = await api.updateMeta(recipeId, body);
+      const card = await api.updateMeta(ref, body);
       setRecipe((r) => (r ? { ...r, ...card, ingredients: r.ingredients, utensils: r.utensils, steps: r.steps, nutrition: r.nutrition } : r));
+      setRef(card.id);
       onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Enregistrement impossible.");
@@ -96,16 +95,19 @@ export default function RecipeDetailDialog({
         )}
 
         <div className="flex flex-wrap items-center gap-2 text-sm text-stone-600 dark:text-stone-400">
-          <SourceBadge source={recipe.source} />
+          <SourceBadge source={recipe.source} site={recipe.site_label} />
           {recipe.difficulty && <span>{DIFFICULTY_LABELS[recipe.difficulty]}</span>}
           {recipe.prep_minutes ? <span>· Préparation {recipe.prep_minutes} min</span> : null}
           {recipe.cook_minutes ? <span>· Cuisson {recipe.cook_minutes} min</span> : null}
+          {(recipe.prep_minutes ?? 0) + (recipe.cook_minutes ?? 0) > 0 && (
+            <span>· Total {(recipe.prep_minutes ?? 0) + (recipe.cook_minutes ?? 0)} min</span>
+          )}
           {recipe.is_vegan ? <span>· Vegan</span> : recipe.is_vegetarian ? <span>· Végétarien</span> : null}
           <HealthBadge score={recipe.health_score} />
         </div>
 
         {recipe.status === "draft" && (
-          <p className="rounded-lg bg-stone-100 px-3 py-2 text-sm dark:bg-stone-800">Brouillon : n'apparaît pas dans les propositions.</p>
+          <p className="rounded-lg bg-stone-100 px-3 py-2 text-sm dark:bg-stone-800">Brouillon : n'apparaît pas dans la recherche.</p>
         )}
         <div className="flex flex-wrap gap-2 text-sm">
           {recipe.is_mine ? (
@@ -129,9 +131,14 @@ export default function RecipeDetailDialog({
           )}
         </div>
 
+        {onChoose && (
+          <button className={primaryButton + " w-full"} onClick={() => onChoose(recipe, servings)}>
+            {chooseLabel ?? "Choisir"}
+          </button>
+        )}
         <div className="flex flex-wrap items-center gap-2">
-          <button className={primaryButton + " py-1.5 text-sm"} onClick={() => setPlanning(true)}>
-            Planifier
+          <button className={(onChoose ? secondaryButton : primaryButton) + " py-1.5 text-sm"} onClick={() => setPlanning(true)}>
+            Programmer
           </button>
           <button className={secondaryButton + " py-1.5 text-sm"} onClick={() => update({ is_favorite: !recipe.is_favorite })}>
             {recipe.is_favorite ? "★ Favori" : "☆ Ajouter aux favoris"}
@@ -148,12 +155,13 @@ export default function RecipeDetailDialog({
               </button>
             ))}
           </div>
-          {recipe.times_cooked > 0 && (
-            <span className="text-sm text-stone-500">
-              Déjà cuisiné {recipe.times_cooked}×{recipe.last_cooked_on && `, la dernière fois le ${formatDate(recipe.last_cooked_on)}`}
-            </span>
-          )}
         </div>
+        {!recipe.recipe_id && (
+          <p className="text-xs text-stone-500">
+            Recette trouvée sur {recipe.site_label ?? "le web"} : elle est gardée quand tu la programmes, l'épingles ou la mets en
+            favori (ta note et ton commentaire avec).
+          </p>
+        )}
 
         <div className="space-y-2">
           <textarea
@@ -208,13 +216,13 @@ export default function RecipeDetailDialog({
           <ul className="divide-y divide-stone-200 text-sm dark:divide-stone-800">
             {recipe.ingredients.map((i) => (
               <li key={i.id} className="flex items-center justify-between gap-3 py-1.5">
-                <span>
+                <span title={i.raw_text}>
                   {i.amount && <span className="font-medium">{i.amount} </span>}
                   {i.name}
-                  {i.expiring && <span className="ml-1 text-amber-600">· bientôt périmé</span>}
+                  {i.optional && <span className="ml-1 text-stone-500">· facultatif</span>}
                   {i.disliked && <span className="ml-1 text-orange-600">· tu n'aimes pas</span>}
                 </span>
-                <span className={"shrink-0 text-xs font-medium " + STATUS[i.status].style}>{STATUS[i.status].label}</span>
+                {i.wanted && <span className="shrink-0 text-xs font-medium text-brand-700 dark:text-brand-500">✓ coché</span>}
               </li>
             ))}
           </ul>
@@ -268,7 +276,7 @@ export default function RecipeDetailDialog({
 
         {recipe.external_url && (
           <a href={recipe.external_url} target="_blank" rel="noreferrer" className="inline-block text-sm text-brand-700 hover:underline dark:text-brand-500">
-            Voir la recette sur Marmiton ↗
+            Voir la recette sur {recipe.site_label ?? "le site"} ↗
           </a>
         )}
       </div>
@@ -278,8 +286,8 @@ export default function RecipeDetailDialog({
           onSaved={onChanged}
           onClose={() => {
             setEditing(null);
-            if (editing !== recipeId) onClose();  // une copie : on referme la recette d'origine
-            else api.recipe(recipeId, servings).then(setRecipe).catch(() => onClose());
+            if (editing !== ref) onClose(); // une copie : on referme la recette d'origine
+            else api.recipe(ref, servings, wanted).then(setRecipe).catch(() => onClose());
           }}
         />
       )}
@@ -287,7 +295,7 @@ export default function RecipeDetailDialog({
       {planning && (
         <PlanDialog
           title={recipe.title}
-          recipeId={recipe.id}
+          recipeRef={ref}
           defaultServings={servings}
           onPlanned={onChanged}
           onClose={() => setPlanning(false)}

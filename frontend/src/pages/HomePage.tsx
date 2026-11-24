@@ -2,17 +2,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type User } from "../api";
 import { SuperAdminBanner } from "../components/StatusViews";
 import AgendaPage from "./AgendaPage";
-import InventoryPage from "./InventoryPage";
 import MealsPage from "./MealsPage";
 import PreferencesPage from "./PreferencesPage";
 import SharingPage from "./SharingPage";
 import ShoppingPage from "./ShoppingPage";
 import UtensilsPage from "./UtensilsPage";
 
-type SectionId = "inventory" | "meals" | "agenda" | "shopping" | "utensils" | "sharing" | "preferences";
+type SectionId = "meals" | "agenda" | "shopping" | "utensils" | "sharing" | "preferences";
 
 const SECTIONS: { id: SectionId; label: string }[] = [
-  { id: "inventory", label: "Inventaire" },
   { id: "meals", label: "Repas" },
   { id: "agenda", label: "Agenda" },
   { id: "shopping", label: "Courses" },
@@ -23,7 +21,7 @@ const SECTIONS: { id: SectionId; label: string }[] = [
 
 function initialSection(): SectionId {
   const hash = window.location.hash.slice(1) as SectionId;
-  return SECTIONS.some((s) => s.id === hash) ? hash : "inventory";
+  return SECTIONS.some((s) => s.id === hash) ? hash : "meals";
 }
 
 export default function HomePage({
@@ -118,7 +116,6 @@ export default function HomePage({
 
       <main className="mx-auto max-w-5xl px-4 py-6">
         {user.role === "super_admin" && <SuperAdminBanner />}
-        {section === "inventory" && <InventoryPage />}
         {section === "meals" && <MealsPage />}
         {section === "agenda" && <AgendaPage />}
         {section === "shopping" && <ShoppingPage />}

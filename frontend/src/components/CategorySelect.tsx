@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, type Category } from "../../api";
-import { inputClass } from "../ui";
+import { api, type Category } from "../api";
+import { inputClass } from "./ui";
 
 let cached: Promise<Category[]> | null = null; // la liste des catégories ne change pas : chargée une fois
 

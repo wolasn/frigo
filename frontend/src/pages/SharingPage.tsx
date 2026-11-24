@@ -1,17 +1,17 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { api, type Inventory, type InventoryDetail, type MyInvitation, type NotificationSummary, type Role } from "../api";
-import { ErrorMessage, inputClass, primaryButton, secondaryButton, Loading } from "../components/ui";
+import { api, type Agenda, type AgendaDetail, type MyInvitation, type NotificationSummary, type Role } from "../api";
 import SignupLink from "../components/SignupLink";
+import { ErrorMessage, inputClass, Loading, primaryButton, secondaryButton } from "../components/ui";
 
 const ROLE_LABELS: Record<Role, string> = { admin: "Administrateur", contributor: "Contributeur", member: "Membre" };
 const ROLE_HELP: Record<Role, string> = {
-  admin: "tout, y compris gérer les membres et supprimer le partage",
-  contributor: "en plus : planifier et modifier les repas de l'agenda partagé",
-  member: "voir, ajouter et retirer des aliments, cocher les repas cuisinés et les achats",
+  admin: "tout, y compris gérer les membres et supprimer l'agenda",
+  contributor: "en plus : programmer, déplacer, remplacer et retirer des repas",
+  member: "voir l'agenda, cocher les courses et y ajouter des articles",
 };
 
 export default function SharingPage({ onChanged }: { onChanged: () => void }) {
-  const [inventories, setInventories] = useState<Inventory[] | null>(null);
+  const [agendas, setAgendas] = useState<Agenda[] | null>(null);
   const [invitations, setInvitations] = useState<MyInvitation[]>([]);
   const [notifications, setNotifications] = useState<NotificationSummary | null>(null);
   const [newName, setNewName] = useState("");
@@ -19,7 +19,7 @@ export default function SharingPage({ onChanged }: { onChanged: () => void }) {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    api.inventories().then(setInventories).catch(() => setError("Impossible de charger tes inventaires."));
+    api.agendas().then(setAgendas).catch(() => setError("Impossible de charger tes agendas partagés."));
     api.myInvitations().then(setInvitations).catch(() => setInvitations([]));
     api.notifications().then(setNotifications).catch(() => setNotifications(null));
     onChanged();
@@ -44,7 +44,7 @@ export default function SharingPage({ onChanged }: { onChanged: () => void }) {
   async function create(event: FormEvent) {
     event.preventDefault();
     await run(async () => {
-      const created = await api.createSharedInventory(newName.trim());
+      const created = await api.createAgenda(newName.trim());
       setNewName("");
       setOpen(created.id);
     });
@@ -55,7 +55,7 @@ export default function SharingPage({ onChanged }: { onChanged: () => void }) {
       <div>
         <h1 className="mb-1 text-2xl font-semibold">Partages</h1>
         <p className="text-sm text-stone-600 dark:text-stone-400">
-          Un inventaire partagé (frigo de la coloc, de la famille…) a son propre agenda et sa propre liste de courses. Chaque membre choisit s'il est pris en compte dans ses propositions de repas.
+          Un agenda partagé (coloc, famille…) réunit les repas de plusieurs personnes, avec sa propre liste de courses.
         </p>
       </div>
 
@@ -68,7 +68,7 @@ export default function SharingPage({ onChanged }: { onChanged: () => void }) {
             {invitations.map((inv) => (
               <li key={inv.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand-500 bg-white p-4 dark:bg-stone-900">
                 <span>
-                  <strong>{inv.invited_by ?? "Quelqu'un"}</strong> t'invite à rejoindre <strong>« {inv.inventory_name} »</strong>
+                  <strong>{inv.invited_by ?? "Quelqu'un"}</strong> t'invite à rejoindre l'agenda <strong>« {inv.agenda_name} »</strong>
                 </span>
                 <span className="flex gap-2">
                   <button className={primaryButton} onClick={() => run(() => api.acceptInvitation(inv.id))}>
@@ -85,29 +85,29 @@ export default function SharingPage({ onChanged }: { onChanged: () => void }) {
       )}
 
       <section>
-        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-stone-500">Mes inventaires</h2>
-        {inventories === null ? (
+        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-stone-500">Mes agendas partagés</h2>
+        {agendas === null ? (
           <Loading />
+        ) : agendas.length === 0 ? (
+          <p className="text-sm text-stone-500">Aucun pour l'instant : ton agenda personnel reste le tien.</p>
         ) : (
           <ul className="space-y-3">
-            {inventories.map((inventory) => (
-              <li key={inventory.id} className="rounded-xl border border-stone-200 bg-white dark:border-stone-800 dark:bg-stone-900">
-                <button className="flex w-full items-center justify-between gap-3 p-4 text-left" onClick={() => setOpen(open === inventory.id ? null : inventory.id)}>
+            {agendas.map((agenda) => (
+              <li key={agenda.id} className="rounded-xl border border-stone-200 bg-white dark:border-stone-800 dark:bg-stone-900">
+                <button className="flex w-full items-center justify-between gap-3 p-4 text-left" onClick={() => setOpen(open === agenda.id ? null : agenda.id)}>
                   <span>
-                    <span className="font-medium">{inventory.name}</span>
-                    <span className="ml-2 text-sm text-stone-500">
-                      {inventory.kind === "personal" ? "personnel" : `partagé · ${ROLE_LABELS[inventory.role].toLowerCase()}`}
-                    </span>
+                    <span className="font-medium">{agenda.name}</span>
+                    <span className="ml-2 text-sm text-stone-500">{ROLE_LABELS[agenda.my_role].toLowerCase()}</span>
                   </span>
-                  <span className="text-stone-400">{open === inventory.id ? "▴" : "▾"}</span>
+                  <span className="text-stone-400">{open === agenda.id ? "▴" : "▾"}</span>
                 </button>
-                {open === inventory.id && <InventoryPanel inventory={inventory} run={run} onClosed={() => setOpen(null)} />}
+                {open === agenda.id && <AgendaPanel agenda={agenda} run={run} onClosed={() => setOpen(null)} />}
               </li>
             ))}
           </ul>
         )}
         <form onSubmit={create} className="mt-4 flex max-w-lg gap-2">
-          <input className={inputClass} placeholder="Nom du nouvel inventaire partagé (ex. Frigo de la coloc)" value={newName} onChange={(e) => setNewName(e.target.value)} maxLength={60} />
+          <input className={inputClass} placeholder="Nom du nouvel agenda partagé (ex. Coloc)" value={newName} onChange={(e) => setNewName(e.target.value)} maxLength={60} />
           <button type="submit" className={primaryButton} disabled={!newName.trim()}>
             Créer
           </button>
@@ -132,24 +132,15 @@ export default function SharingPage({ onChanged }: { onChanged: () => void }) {
   );
 }
 
-function InventoryPanel({
-  inventory,
-  run,
-  onClosed,
-}: {
-  inventory: Inventory;
-  run: (action: () => Promise<unknown>) => Promise<void>;
-  onClosed: () => void;
-}) {
-  const [detail, setDetail] = useState<InventoryDetail | null>(null);
+function AgendaPanel({ agenda, run, onClosed }: { agenda: Agenda; run: (action: () => Promise<unknown>) => Promise<void>; onClosed: () => void }) {
+  const [detail, setDetail] = useState<AgendaDetail | null>(null);
   const [username, setUsername] = useState("");
-  const [name, setName] = useState(inventory.name);
-  const shared = inventory.kind === "shared";
-  const isAdmin = !shared || detail?.my_role === "admin";
+  const [name, setName] = useState(agenda.name);
+  const isAdmin = agenda.my_role === "admin";
 
   const reload = useCallback(() => {
-    api.inventoryDetail(inventory.id).then(setDetail).catch(() => setDetail(null));
-  }, [inventory.id]);
+    api.agendaDetail(agenda.id).then(setDetail).catch(() => setDetail(null));
+  }, [agenda.id]);
   useEffect(reload, [reload]);
 
   const act = (action: () => Promise<unknown>) => run(action).then(reload);
@@ -162,28 +153,20 @@ function InventoryPanel({
           className="flex max-w-md gap-2"
           onSubmit={(e) => {
             e.preventDefault();
-            act(() => api.renameInventory(inventory.id, name.trim()));
+            act(() => api.renameAgenda(agenda.id, name.trim()));
           }}
         >
-          <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} maxLength={60} aria-label="Nom de l'inventaire" />
-          <button className={secondaryButton} disabled={!name.trim() || name.trim() === inventory.name}>
+          <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} maxLength={60} aria-label="Nom de l'agenda" />
+          <button className={secondaryButton} disabled={!name.trim() || name.trim() === agenda.name}>
             Renommer
           </button>
         </form>
       )}
 
-      {shared && detail && (
+      {detail === null ? (
+        <Loading inline />
+      ) : (
         <>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="size-4 accent-brand-600"
-              checked={detail.include_in_suggestions}
-              onChange={(e) => act(() => api.setIncludeInSuggestions(inventory.id, e.target.checked))}
-            />
-            Prendre en compte cet inventaire dans mes propositions de repas
-          </label>
-
           <div>
             <h3 className="mb-2 font-medium">Membres</h3>
             <ul className="divide-y divide-stone-200 dark:divide-stone-800">
@@ -197,7 +180,7 @@ function InventoryPanel({
                       <select
                         className={inputClass + " w-auto py-1 text-sm"}
                         value={m.role}
-                        onChange={(e) => act(() => api.changeRole(inventory.id, m.user_id, e.target.value as Role))}
+                        onChange={(e) => act(() => api.changeRole(agenda.id, m.user_id, e.target.value as Role))}
                         title={ROLE_HELP[m.role]}
                       >
                         {(["admin", "contributor", "member"] as Role[]).map((r) => (
@@ -210,7 +193,7 @@ function InventoryPanel({
                       <span className="text-sm text-stone-600 dark:text-stone-400">{ROLE_LABELS[m.role]}</span>
                     )}
                     {isAdmin && !m.is_me && (
-                      <button className="text-sm text-red-700 hover:underline dark:text-red-400" onClick={() => act(() => api.removeMember(inventory.id, m.user_id))}>
+                      <button className="text-sm text-red-700 hover:underline dark:text-red-400" onClick={() => act(() => api.removeMember(agenda.id, m.user_id))}>
                         Retirer
                       </button>
                     )}
@@ -230,7 +213,7 @@ function InventoryPanel({
                 className="flex max-w-md gap-2"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  act(() => api.invite(inventory.id, username.trim())).then(() => setUsername(""));
+                  act(() => api.invite(agenda.id, username.trim())).then(() => setUsername(""));
                 }}
               >
                 <input className={inputClass} placeholder="Son identifiant" value={username} onChange={(e) => setUsername(e.target.value)} autoCapitalize="none" />
@@ -245,7 +228,7 @@ function InventoryPanel({
                       <span className="text-stone-600 dark:text-stone-400">
                         Invitation en attente : {i.display_name} (@{i.username})
                       </span>
-                      <button className="text-stone-500 hover:underline" onClick={() => act(() => api.cancelInvitation(inventory.id, i.id))}>
+                      <button className="text-stone-500 hover:underline" onClick={() => act(() => api.cancelInvitation(agenda.id, i.id))}>
                         Annuler
                       </button>
                     </li>
@@ -257,29 +240,25 @@ function InventoryPanel({
         </>
       )}
 
-      <p className="text-sm text-stone-500">
-        Lieux de rangement : {inventory.locations.map((l) => l.name).join(", ")}. Ils se gèrent depuis la page Inventaire.
-      </p>
-
-      {shared && me && (
+      {me && (
         <div className="flex flex-wrap gap-2 border-t border-stone-200 pt-4 dark:border-stone-800">
           <button
             className={secondaryButton}
             onClick={() => {
-              if (window.confirm(`Quitter « ${inventory.name} » ?`)) run(() => api.removeMember(inventory.id, me.user_id)).then(onClosed);
+              if (window.confirm(`Quitter « ${agenda.name} » ?`)) run(() => api.removeMember(agenda.id, me.user_id)).then(onClosed);
             }}
           >
-            Quitter ce partage
+            Quitter cet agenda
           </button>
           {isAdmin && (
             <button
               className="rounded-lg px-4 py-2 font-medium text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:bg-stone-800"
               onClick={() => {
-                if (window.confirm(`Supprimer « ${inventory.name} » pour tous ses membres ? Ses aliments, son agenda et sa liste de courses seront effacés. C'est définitif.`))
-                  run(() => api.deleteInventory(inventory.id)).then(onClosed);
+                if (window.confirm(`Supprimer « ${agenda.name} » pour tous ses membres ? Ses repas et sa liste de courses seront effacés. C'est définitif.`))
+                  run(() => api.deleteAgenda(agenda.id)).then(onClosed);
               }}
             >
-              Supprimer le partage
+              Supprimer l'agenda
             </button>
           )}
         </div>

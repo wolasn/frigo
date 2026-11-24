@@ -1,17 +1,17 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { api, type Inventory, type RecipeShareOut } from "../../api";
+import { api, type Agenda, type RecipeShareOut } from "../../api";
 import { ErrorMessage, inputClass, Modal, primaryButton, secondaryButton } from "../ui";
 
 export default function ShareRecipeDialog({ recipeId, title, onClose }: { recipeId: string; title: string; onClose: () => void }) {
   const [shares, setShares] = useState<RecipeShareOut[] | null>(null);
-  const [inventories, setInventories] = useState<Inventory[]>([]);
+  const [agendas, setAgendas] = useState<Agenda[]>([]);
   const [username, setUsername] = useState("");
-  const [inventoryId, setInventoryId] = useState("");
+  const [agendaId, setAgendaId] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api.recipeShares(recipeId).then(setShares).catch(() => setShares([]));
-    api.inventories().then((list) => setInventories(list.filter((i) => i.kind === "shared"))).catch(() => setInventories([]));
+    api.agendas().then(setAgendas).catch(() => setAgendas([]));
   }, [recipeId]);
 
   async function run(action: () => Promise<RecipeShareOut[]>) {
@@ -39,17 +39,17 @@ export default function ShareRecipeDialog({ recipeId, title, onClose }: { recipe
           Partager
         </button>
       </form>
-      {inventories.length > 0 && (
+      {agendas.length > 0 && (
         <div className="mb-4 flex gap-2">
-          <select className={inputClass} value={inventoryId} onChange={(e) => setInventoryId(e.target.value)}>
-            <option value="">Ou tous les membres d'un inventaire partagé…</option>
-            {inventories.map((i) => (
-              <option key={i.id} value={i.id}>
-                {i.name}
+          <select className={inputClass} value={agendaId} onChange={(e) => setAgendaId(e.target.value)}>
+            <option value="">Ou tous les membres d'un agenda partagé…</option>
+            {agendas.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
               </option>
             ))}
           </select>
-          <button className={secondaryButton} disabled={!inventoryId} onClick={() => run(() => api.shareRecipe(recipeId, { inventory_id: inventoryId })).then(() => setInventoryId(""))}>
+          <button className={secondaryButton} disabled={!agendaId} onClick={() => run(() => api.shareRecipe(recipeId, { agenda_id: agendaId })).then(() => setAgendaId(""))}>
             Partager
           </button>
         </div>

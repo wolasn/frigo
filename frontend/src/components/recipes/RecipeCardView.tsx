@@ -17,7 +17,10 @@ export function HealthBadge({ score }: { score: number | null }) {
   );
 }
 
-export function SourceBadge({ source }: { source: RecipeCard["source"] }) {
+export function SourceBadge({ source, site }: { source: RecipeCard["source"]; site?: string | null }) {
+  if (source === "web" && site) {
+    return <span className="whitespace-nowrap rounded-full bg-stone-100 px-2 py-0.5 text-xs text-stone-600 dark:bg-stone-800 dark:text-stone-300">{site}</span>;
+  }
   if (source === "ai") {
     return <span className="rounded-full bg-violet-600 px-2 py-0.5 text-xs font-bold text-white">IA</span>;
   }
@@ -52,25 +55,29 @@ export default function RecipeCardView({ card, onOpen }: { card: RecipeCard; onO
       <div className="flex flex-1 flex-col gap-2 p-3">
         <div className="flex items-start justify-between gap-2">
           <p className="font-medium leading-snug">{card.title}</p>
-          <SourceBadge source={card.source} />
+          <SourceBadge source={card.source} site={card.site_label} />
         </div>
         <div className="flex flex-wrap gap-1 text-xs text-stone-600 dark:text-stone-400">
           {card.difficulty && <span>{DIFFICULTY_LABELS[card.difficulty]}</span>}
           {time && <span>· {time}</span>}
           {card.is_vegan ? <span>· Vegan</span> : card.is_vegetarian ? <span>· Végétarien</span> : null}
-          {card.times_cooked > 0 && <span>· Déjà cuisiné {card.times_cooked}×</span>}
         </div>
         <div className="flex flex-wrap gap-1">
           <HealthBadge score={card.health_score} />
-          {card.rating && <span className="text-xs text-amber-600">{"★".repeat(card.rating)}</span>}
+          {card.rating ? (
+            <span className="text-xs text-amber-600" title="Ta note">{"★".repeat(card.rating)}</span>
+          ) : card.site_rating ? (
+            <span className="text-xs text-stone-500" title="Note des internautes">★ {card.site_rating.toLocaleString("fr-FR")}/5</span>
+          ) : null}
         </div>
-        {card.expiring_used.length > 0 && (
-          <p className="text-xs text-amber-700 dark:text-amber-400">Utilise : {card.expiring_used.join(", ")} (bientôt périmé)</p>
+        {card.wanted_found.length > 0 && (
+          <p className="text-xs font-medium text-brand-700 dark:text-brand-500">✓ {card.wanted_found.join(", ")}</p>
         )}
-        {card.missing.length > 0 ? (
-          <p className="text-xs text-stone-600 dark:text-stone-400">À acheter : {card.missing.join(", ")}</p>
-        ) : (
-          <p className="text-xs font-medium text-brand-700 dark:text-brand-500">Tout est disponible</p>
+        {card.others.length > 0 && (
+          <p className="text-xs text-stone-600 dark:text-stone-400" title={card.others.join(", ")}>
+            {card.wanted_found.length > 0 ? "+ " : ""}
+            {card.others.length} autre{card.others.length > 1 ? "s" : ""} ingrédient{card.others.length > 1 ? "s" : ""}
+          </p>
         )}
         {card.missing_utensils.length > 0 && (
           <p className="text-xs font-medium text-red-700 dark:text-red-400">Ustensile manquant : {card.missing_utensils.join(", ")}</p>
