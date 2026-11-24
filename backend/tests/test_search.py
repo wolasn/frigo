@@ -9,6 +9,7 @@ from app.clock import today
 from app.maintenance import purge
 from app.models import IngredientTerm, Recipe
 from app.models.enums import Difficulty
+from app.services.sources import SourceError
 
 PASSWORD = "un-mot-de-passe-solide"
 
@@ -144,3 +145,19 @@ def test_importer_un_lien(alice, menu):
     card = alice.post("/api/recipes/import", json={"url": menu["puree"].url + "?utm=x"}).json()
     assert card["title"] == "Purée test pommes de terre" and card["site"] == "ptitchef"
     assert alice.post("/api/recipes/import", json={"url": "https://example.com/recette"}).status_code == 422
+
+
+def test_page_illisible_pas_relue(alice, web, monkeypatch):
+    bad = web.add("ptitchef", "Testillisible poireau vinaigrette", ["4 poireaux"])
+    real = web.recipe
+
+    def broken(url):
+        if url == bad.url:
+            web.pages.append(url)
+            raise SourceError("Page sans recette (test).")
+        return real(url)
+
+    monkeypatch.setattr(web, "recipe", broken)
+    search(alice, ingredients=["Poireau"])
+    search(alice, ingredients=["Poireau"])
+    assert web.pages.count(bad.url) == 1

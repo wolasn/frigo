@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import delete, exists, or_, select
+from sqlalchemy import delete, exists, or_, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -215,6 +215,8 @@ def persist(session: Session, draft: Draft) -> Recipe:
     if draft.in_db:
         return draft.recipe
     if draft.recipe.external_url:
+        # Verrou sur l'adresse jusqu'à la fin de la transaction : la seconde requête attend puis trouve la recette.
+        session.execute(text("select pg_advisory_xact_lock(hashtext(:key))"), {"key": "recipe:" + draft.recipe.external_url})
         existing = session.scalar(select(Recipe).where(Recipe.external_url == draft.recipe.external_url))
         if existing is not None:
             return existing

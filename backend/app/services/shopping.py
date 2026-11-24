@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
 
-from sqlalchemy import delete, insert, select
+from sqlalchemy import delete, insert, select, text
 from sqlalchemy.orm import Session
 
 from app.clock import today
@@ -98,7 +98,9 @@ def _recommendation(meal_date: date, life_days: int | None) -> tuple[date | None
 
 
 def scope_meals(session: Session, user: User, shared_agenda_id: uuid.UUID | None) -> list[PlannedMeal]:
-    query = select(PlannedMeal).where(PlannedMeal.meal_date >= today())
+    # FOR KEY SHARE : un repas lu ici ne peut pas être supprimé avant la fin de la transaction (la liste qui le
+    # référence est en cours d'écriture) ; le modifier reste possible.
+    query = select(PlannedMeal).where(PlannedMeal.meal_date >= today()).with_for_update(key_share=True)
     if shared_agenda_id is None:
         query = query.where(PlannedMeal.user_id == user.id, PlannedMeal.shared_agenda_id.is_(None))
     else:
@@ -106,8 +108,8 @@ def scope_meals(session: Session, user: User, shared_agenda_id: uuid.UUID | None
     return list(session.scalars(query))
 
 
-def _needs(session: Session, meals: list[PlannedMeal]) -> list[_Need]:
-    shelf = ShelfLife(session)
+def _needs(session: Session, meals: list[PlannedMeal], shelf: ShelfLife | None = None) -> list[_Need]:
+    shelf = shelf or ShelfLife(session)
     recipes = {r.id: r for r in session.scalars(select(Recipe).where(Recipe.id.in_({m.recipe_id for m in meals})))} if meals else {}
     rows_by_recipe: dict[uuid.UUID, list[tuple[RecipeIngredient, Food | None]]] = defaultdict(list)
     if recipes:
@@ -157,34 +159,66 @@ def _group(needs: list[_Need]) -> list[_Line]:
     return list(lines.values())
 
 
-def regenerate(session: Session, user: User, shared_agenda_id: uuid.UUID | None) -> None:
-    """Remplace les lignes générées de la liste par celles calculées maintenant."""
+def lock_list(session: Session, user: User, shared_agenda_id: uuid.UUID | None) -> None:
+    """Une liste à la fois : deux personnes qui ouvrent la liste d'un même agenda (ou qui cochent pendant qu'elle se
+    recalcule) passent l'une après l'autre. Verrou relâché à la fin de la transaction."""
+    key = f"shopping:{shared_agenda_id}" if shared_agenda_id else f"shopping:user:{user.id}"
+    session.execute(text("select pg_advisory_xact_lock(hashtext(:key))"), {"key": key})
+
+
+def _signature(food_id, label, quantity, unit, recommended, perishable, risk, meals) -> tuple:
+    norm = lambda d: None if d is None else Decimal(d).normalize()  # noqa: E731
+    return (food_id, label, norm(quantity), unit, recommended, bool(perishable), bool(risk),
+            frozenset((m, norm(q)) for m, q in meals))
+
+
+def regenerate(session: Session, user: User, shared_agenda_id: uuid.UUID | None, shelf: ShelfLife | None = None) -> None:
+    """Met les lignes générées de la liste à jour d'après les repas prévus. N'écrit que si quelque chose a changé
+    (ouvrir la page ne réécrit pas la liste à chaque fois)."""
+    lock_list(session, user, shared_agenda_id)
     scope = (
         (ShoppingListItem.shared_agenda_id == shared_agenda_id)
         if shared_agenda_id
         else ((ShoppingListItem.user_id == user.id) & ShoppingListItem.shared_agenda_id.is_(None))
     )
-    session.execute(delete(ShoppingListItem).where(
-        scope, ShoppingListItem.origin == ShoppingOrigin.GENERATED, ShoppingListItem.purchased_at.is_(None)))
-    # Déjà acheté pour un repas : pas redemandé pour ce repas (un nouveau repas le fait revenir).
-    bought = {(meal_id, food_id or label) for meal_id, food_id, label in session.execute(
-        select(ShoppingListItemMeal.planned_meal_id, ShoppingListItem.food_id, ShoppingListItem.label)
-        .join(ShoppingListItem, ShoppingListItem.id == ShoppingListItemMeal.shopping_list_item_id)
-        .where(scope, ShoppingListItem.origin == ShoppingOrigin.GENERATED, ShoppingListItem.purchased_at.is_not(None))
-    )}
-    needs = [n for n in _needs(session, scope_meals(session, user, shared_agenda_id))
+    # Lignes générées actuelles, avec leurs repas : en attente (à comparer) ou achetées (pas redemandées).
+    current: dict[uuid.UUID, list] = {}
+    bought: set[tuple] = set()
+    for item, meal_id, meal_quantity in session.execute(
+        select(ShoppingListItem, ShoppingListItemMeal.planned_meal_id, ShoppingListItemMeal.quantity)
+        .outerjoin(ShoppingListItemMeal, ShoppingListItemMeal.shopping_list_item_id == ShoppingListItem.id)
+        .where(scope, ShoppingListItem.origin == ShoppingOrigin.GENERATED)
+    ):
+        if item.purchased_at is not None:
+            if meal_id is not None:
+                bought.add((meal_id, item.food_id or item.label))
+            continue
+        entry = current.setdefault(item.id, [item, []])
+        if meal_id is not None:
+            entry[1].append((meal_id, meal_quantity))
+
+    needs = [n for n in _needs(session, scope_meals(session, user, shared_agenda_id), shelf)
              if (n.meal.id, n.food.id if n.food else n.label) not in bought]
-    rows, links = [], []
+    rows, links, wanted = [], [], []
     for line in _group(needs):
         quantity, unit = display_quantity(line.food, line.quantity)
+        food_id, label = (line.food.id if line.food else None), line.label[:200]
+        wanted.append(_signature(food_id, label, quantity, unit, line.recommended, line.perishable, line.expiry_risk,
+                                 line.meals.items()))
         row_id = uuid.uuid4()  # identifiant connu tout de suite : deux requêtes pour toute la liste
         rows.append(dict(
             id=row_id, user_id=user.id, shared_agenda_id=shared_agenda_id, origin=ShoppingOrigin.GENERATED,
-            food_id=line.food.id if line.food else None, label=line.label[:200], quantity=quantity, unit=unit,
+            food_id=food_id, label=label, quantity=quantity, unit=unit,
             recommended_purchase_on=line.recommended, is_perishable=line.perishable, expiry_risk=line.expiry_risk,
         ))
         links += [dict(shopping_list_item_id=row_id, planned_meal_id=meal_id, quantity=meal_quantity)
                   for meal_id, meal_quantity in line.meals.items()]
+    existing = [_signature(i.food_id, i.label, i.quantity, i.unit, i.recommended_purchase_on, i.is_perishable,
+                           i.expiry_risk, m) for i, m in current.values()]
+    if sorted(map(repr, existing)) == sorted(map(repr, wanted)):
+        return  # rien n'a changé
+    if current:
+        session.execute(delete(ShoppingListItem).where(ShoppingListItem.id.in_(list(current))))
     if rows:
         session.execute(insert(ShoppingListItem.__table__), rows)
         session.execute(insert(ShoppingListItemMeal.__table__), links)

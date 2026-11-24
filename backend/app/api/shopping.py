@@ -5,13 +5,13 @@ from datetime import UTC, date, datetime
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import CurrentUser, DbSession
 from app.models import AgendaMember, Food, FoodCategory, SharedAgenda, ShoppingListItem, User
 from app.models.enums import ShoppingOrigin
-from app.services.shopping import ShelfLife, freeze_from, meal_titles, regenerate
+from app.services.shopping import ShelfLife, freeze_from, lock_list, meal_titles, regenerate
 
 router = APIRouter(prefix="/api/shopping", tags=["courses"])
 
@@ -64,7 +64,7 @@ def shared_agendas(session: Session, user: User) -> list[SharedAgenda]:
     ))
 
 
-def _lines(session: Session, user: User, shared_agenda_id: uuid.UUID | None) -> list[LineOut]:
+def _lines(session: Session, user: User, shared_agenda_id: uuid.UUID | None, shelf: ShelfLife | None = None) -> list[LineOut]:
     scope = (
         (ShoppingListItem.shared_agenda_id == shared_agenda_id)
         if shared_agenda_id
@@ -77,7 +77,7 @@ def _lines(session: Session, user: User, shared_agenda_id: uuid.UUID | None) -> 
         .where(scope, ShoppingListItem.purchased_at.is_(None))
     ).all()
     titles = meal_titles(session, [item.id for item, _, _ in rows])
-    shelf = ShelfLife(session)
+    shelf = shelf or ShelfLife(session)
     lines = []
     for item, aisle, food in rows:  # l'aliment vient de la même requête : pas une lecture par ligne
         meals = titles.get(item.id, [])
@@ -97,14 +97,15 @@ def _lines(session: Session, user: User, shared_agenda_id: uuid.UUID | None) -> 
 @router.get("")
 def list_shopping(session: DbSession, user: CurrentUser) -> list[ShoppingListOut]:
     """Recalcule les lignes générées puis renvoie la liste personnelle et celles des agendas partagés."""
-    regenerate(session, user, None)
+    shelf = ShelfLife(session)  # une lecture du catalogue pour toutes les listes
+    regenerate(session, user, None, shelf)
     agendas = shared_agendas(session, user)
-    for agenda in agendas:
-        regenerate(session, user, agenda.id)
+    for agenda in sorted(agendas, key=lambda a: str(a.id)):  # verrous toujours dans le même ordre (voir purchase)
+        regenerate(session, user, agenda.id, shelf)
     session.commit()
-    result = [ShoppingListOut(id="personal", name="Ma liste", lines=_lines(session, user, None))]
+    result = [ShoppingListOut(id="personal", name="Ma liste", lines=_lines(session, user, None, shelf))]
     for agenda in agendas:
-        result.append(ShoppingListOut(id=str(agenda.id), name=agenda.name, lines=_lines(session, user, agenda.id)))
+        result.append(ShoppingListOut(id=str(agenda.id), name=agenda.name, lines=_lines(session, user, agenda.id, shelf)))
     return result
 
 
@@ -148,8 +149,13 @@ def delete_manual(line_id: uuid.UUID, session: DbSession, user: CurrentUser) -> 
 def purchase(body: PurchaseIn, session: DbSession, user: CurrentUser) -> PurchaseOut:
     """Lignes cochées comme achetées : elles quittent la liste (et ne reviennent pas pour les mêmes repas)."""
     now = datetime.now(UTC)
-    for line_id in body.ids:
-        item = _get_line(session, user, line_id)
-        item.purchased_at, item.purchased_by = now, user.id
+    items = [_get_line(session, user, line_id) for line_id in body.ids]
+    # Même ordre que list_shopping (liste personnelle, puis agendas par identifiant) : pas d'interblocage.
+    for agenda_id in sorted({i.shared_agenda_id for i in items}, key=lambda a: (a is not None, str(a))):
+        lock_list(session, user, agenda_id)
+    # Une ligne a pu être recalculée entre-temps (repas changé) : seules celles encore là sont cochées.
+    done = session.execute(update(ShoppingListItem).where(
+        ShoppingListItem.id.in_([i.id for i in items]), ShoppingListItem.purchased_at.is_(None))
+        .values(purchased_at=now, purchased_by=user.id)).rowcount
     session.commit()
-    return PurchaseOut(removed_from_list=len(body.ids))
+    return PurchaseOut(removed_from_list=done)

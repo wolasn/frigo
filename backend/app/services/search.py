@@ -13,7 +13,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.orm import Session
 
 from app.models import Recipe, User, WebSearchCache
@@ -44,6 +44,7 @@ class _Memory:
 
     def __init__(self) -> None:
         self._items: dict[str, tuple[float, Draft]] = {}
+        self._failed: dict[str, float] = {}
         self._lock = threading.Lock()
 
     def get(self, ref: str) -> Draft | None:
@@ -53,6 +54,19 @@ class _Memory:
                 return item[1]
             self._items.pop(ref, None)
             return None
+
+    def fail(self, url: str) -> None:
+        """Page illisible (erreur, pas une recette) : pas relue avant 24 h."""
+        with self._lock:
+            self._failed[url] = time.time()
+
+    def failed(self, url: str) -> bool:
+        with self._lock:
+            at = self._failed.get(url)
+            if at is not None and time.time() - at < MEMORY_HOURS * 3600:
+                return True
+            self._failed.pop(url, None)
+            return False
 
     def put(self, draft: Draft) -> None:
         with self._lock:
@@ -64,6 +78,7 @@ class _Memory:
     def clear(self) -> None:
         with self._lock:
             self._items.clear()
+            self._failed.clear()
 
 
 memory = _Memory()
@@ -73,11 +88,16 @@ def normalize_query(query: str) -> str:
     return re.sub(r"\s+", " ", query.strip().lower())
 
 
-def _cached_urls(session: Session, site: str, query: str) -> list[str] | None:
-    entry = session.get(WebSearchCache, (site, normalize_query(query)))
-    if entry and entry.fetched_at > datetime.now(UTC) - timedelta(days=SEARCH_CACHE_DAYS):
-        return list(entry.urls)
-    return None
+def _cached_many(session: Session, sites: list[str], queries: list[str]) -> dict[str, dict[str, list[str] | None]]:
+    """Recherches déjà faites (moins de 7 jours), pour tous les sites et toutes les recherches : une seule requête."""
+    known: dict[str, dict[str, list[str] | None]] = {site: dict.fromkeys(queries) for site in sites}
+    by_norm = {normalize_query(q): q for q in queries}
+    for entry in session.scalars(select(WebSearchCache).where(
+        WebSearchCache.site.in_(sites), WebSearchCache.query_normalized.in_(list(by_norm)),
+        WebSearchCache.fetched_at > datetime.now(UTC) - timedelta(days=SEARCH_CACHE_DAYS),
+    )):
+        known[entry.site][by_norm[entry.query_normalized]] = list(entry.urls)
+    return known
 
 
 def _store_urls(session: Session, site: str, query: str, urls: list[str]) -> None:
@@ -104,7 +124,7 @@ def queries_for(wanted: list[str], text: str | None) -> list[str]:
 
 
 def _fetch_site(client: WebClient, site_name: str, queries: list[str], known: dict[str, list[str] | None],
-                skip: set[str], pages: int) -> tuple[dict[str, list[str]], list[WebRecipe], list[str]]:
+                skip: set[str], pages: int) -> tuple[dict[str, list[str]], list[WebRecipe], list[str], list[str]]:
     """Travail réseau d'un site (dans son propre fil) : recherches absentes du cache, puis pages des recettes."""
     site = SITES[site_name]
     found_urls: dict[str, list[str]] = {}
@@ -125,8 +145,9 @@ def _fetch_site(client: WebClient, site_name: str, queries: list[str], known: di
     for rank in range(max((len(x) for x in lists), default=0)):
         urls += [x[rank] for x in lists if rank < len(x) and x[rank] not in urls]
     recipes: list[WebRecipe] = []
+    failed: list[str] = []
     for url in urls:
-        if len(recipes) >= pages:
+        if len(recipes) + len(failed) >= pages:
             break
         if url in skip:
             continue
@@ -134,7 +155,8 @@ def _fetch_site(client: WebClient, site_name: str, queries: list[str], known: di
             recipes.append(client.recipe(url))
         except SourceError as error:
             errors.append(str(error))
-    return found_urls, recipes, errors
+            failed.append(url)
+    return found_urls, recipes, errors, failed
 
 
 def web_drafts(session: Session, queries: list[str], pages: int = PAGES_PER_SITE,
@@ -143,39 +165,52 @@ def web_drafts(session: Session, queries: list[str], pages: int = PAGES_PER_SITE
     if not queries:
         return [], []
     client = client or WebClient()
-    known = {name: {q: _cached_urls(session, name, q) for q in queries} for name in SITES}
+    known = _cached_many(session, list(SITES), queries)
     # Recettes déjà en mémoire : pas relues ; elles comptent dans les résultats.
     in_memory: dict[str, Draft] = {}
+    skip_failed: set[str] = set()
     budget: dict[str, int] = {}
     for name in SITES:
         found = 0
         for urls in known[name].values():
             for url in urls or []:
-                if url not in in_memory and (draft := memory.get(url)) is not None:
+                if url in in_memory or url in skip_failed:
+                    continue
+                if (draft := memory.get(url)) is not None:
                     in_memory[url] = draft
                     found += 1
+                elif memory.failed(url):
+                    skip_failed.add(url)
+                    found += 1  # une page illisible compte : elle a déjà été essayée
         budget[name] = max(0, pages - found)  # une recherche déjà faite ne relit pas de pages
-    skip = set(in_memory)
+    skip = set(in_memory) | skip_failed
     with ThreadPoolExecutor(max_workers=len(SITES)) as pool:
         futures = {name: pool.submit(_fetch_site, client, name, queries, known[name], skip, budget[name])
                    for name in SITES}
         results = {name: future.result() for name, future in futures.items()}
 
-    matcher = FoodMatcher(session)
-    utensils = standard_utensils(session)
     drafts = list(in_memory.values())
     new: list[Draft] = []
     errors: list[str] = []
-    for name, (found_urls, recipes, site_errors) in results.items():
+    matcher = utensils = None  # catalogue chargé seulement s'il y a des pages nouvelles
+    stored = False
+    for name, (found_urls, recipes, site_errors, failed) in results.items():
         for query, urls in found_urls.items():
             _store_urls(session, name, query, urls)
+            stored = True
         for data in recipes:
+            if matcher is None:
+                matcher, utensils = FoodMatcher(session), standard_utensils(session)
             draft = build_web_draft(data, matcher, utensils)
             memory.put(draft)
             new.append(draft)
+        for url in failed:
+            memory.fail(url)
         errors += site_errors
-    remember_terms(session, new)
-    session.commit()
+    if new:
+        remember_terms(session, new)
+    if new or stored:
+        session.commit()
     if errors:
         logger.info("Recherche web : %s erreur(s), dont %s", len(errors), errors[0])
     return drafts + new, errors
@@ -208,6 +243,40 @@ def get_draft(session: Session, user: User, ref: str, client: WebClient | None =
         remember_terms(session, [draft])
         session.commit()
     return draft
+
+
+def get_drafts(session: Session, user: User, refs: list[str]) -> dict[str, Draft | None]:
+    """Plusieurs recettes par leur référence : celles en base sont chargées ensemble (quelques requêtes en tout)."""
+    out: dict[str, Draft | None] = {}
+    ids: dict[uuid.UUID, str] = {}
+    urls: dict[str, str] = {}
+    for ref in refs:
+        try:
+            ids[uuid.UUID(ref.strip())] = ref
+        except ValueError:
+            found = site_for_url(ref) if not ref.startswith("ai:") else None
+            if found is not None:
+                urls[found[1]] = ref
+            else:
+                out[ref] = memory.get(ref.strip()) if ref.startswith("ai:") else None
+    if ids or urls:
+        conditions = []
+        if ids:
+            conditions.append(Recipe.id.in_(list(ids)) & visible_recipes_clause(user))
+        if urls:
+            conditions.append(Recipe.external_url.in_(list(urls)))
+        recipes = list(session.scalars(select(Recipe).where(or_(*conditions))))
+        for draft in load_drafts(session, recipes) if recipes else []:
+            ref = ids.get(draft.recipe.id) or urls.get(draft.recipe.external_url)
+            if ref is not None:
+                out[ref] = draft
+    for ref in refs:
+        if ref not in out:
+            try:
+                out[ref] = get_draft(session, user, ref)  # en mémoire, ou lue sur le site
+            except SourceError:
+                out[ref] = None
+    return out
 
 
 def with_saved(session: Session, drafts: list[Draft]) -> list[Draft]:

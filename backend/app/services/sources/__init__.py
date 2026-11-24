@@ -272,10 +272,15 @@ class WebClient:
 
     _locks = {name: threading.Lock() for name in SITES}
     _last: dict[str, float] = dict.fromkeys(SITES, 0.0)
+    _shared: httpx.Client | None = None
+    _shared_lock = threading.Lock()
 
     def __init__(self, timeout: float = 20) -> None:
-        self._client = httpx.Client(headers={"User-Agent": USER_AGENT, "Accept-Language": "fr-FR,fr;q=0.9"},
-                                    follow_redirects=True, timeout=timeout)
+        with WebClient._shared_lock:  # partagé (httpx.Client est sûr entre fils) : pas un client par recherche
+            if WebClient._shared is None:
+                WebClient._shared = httpx.Client(headers={"User-Agent": USER_AGENT, "Accept-Language": "fr-FR,fr;q=0.9"},
+                                                  follow_redirects=True, timeout=timeout)
+        self._client = WebClient._shared
 
     def _get(self, site: Site, url: str, params: dict | None = None) -> str:
         with WebClient._locks[site.name]:

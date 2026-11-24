@@ -24,7 +24,7 @@ from app.services.ai_recipes import request_for
 from app.services.ai_usage import AI_DAILY_CALLS, ai_calls_today, recorder
 from app.services.evaluation import Evaluation, Filters, default_filters, evaluate_all
 from app.services.recipes import Draft, load_drafts, persist
-from app.services.search import get_draft, memory, search
+from app.services.search import get_draft, get_drafts, memory, search
 from app.services.sources import SITES, SourceError, site_for_url
 
 router = APIRouter(prefix="/api", tags=["recettes"])
@@ -307,6 +307,8 @@ def update_meta(body: MetaIn, session: DbSession, user: CurrentUser, ref: str = 
     if new["is_pinned"] and not new["comment"]:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Un repas épinglé doit avoir un commentaire.")
     if not draft.in_db and not (new["is_favorite"] or new["is_pinned"]):
+        if not new["rating"] and not new["comment"]:
+            return cards(session, user, [draft])[0]  # rien à garder ni à retirer
         # Une note seule ne garde pas une recette web en base : rien à enregistrer.
         raise HTTPException(status.HTTP_409_CONFLICT,
                             detail="Épingle la recette, mets-la en favori ou programme-la pour la garder et la noter.")
@@ -318,7 +320,10 @@ def update_meta(body: MetaIn, session: DbSession, user: CurrentUser, ref: str = 
     for name, value in new.items():
         setattr(meta, name, value)
     session.commit()
-    return cards(session, user, load_drafts(session, [session.get(Recipe, recipe.id)]))[0]
+    if not draft.in_db:  # la même recette, désormais en base (sans la relire)
+        draft = Draft(ref=str(recipe.id), recipe=recipe, ingredients=draft.ingredients, steps=draft.steps,
+                      utensils=draft.utensils, rating=draft.rating, category=draft.category, in_db=True)
+    return cards(session, user, [draft])[0]
 
 
 # ---------- IA ----------
@@ -370,17 +375,15 @@ def daily_recipes(session: DbSession, user: CurrentUser) -> DailyOut:
     from app.services.daily import _food_names, reasons, todays, Pick
     from app.services import season
 
+    rows = todays(session, user)
     filters = default_filters(session, user)
     seasonal = _food_names(session, season.in_season(today(), fruits=False))
+    drafts = get_drafts(session, user, [row.recipe_ref for row in rows])
+    # Une recette inventée par l'IA oubliée (redémarrage) ou retirée du site n'est pas montrée.
+    kept = [(row, drafts[row.recipe_ref]) for row in rows if drafts.get(row.recipe_ref) is not None]
+    evaluations = evaluate_all(session, user, [d for _, d in kept], filters)
     out = []
-    for row in todays(session, user):
-        try:
-            draft = get_draft(session, user, row.recipe_ref)
-        except SourceError:
-            draft = None
-        if draft is None:
-            continue  # recette inventée par l'IA oubliée (redémarrage) ou retirée du site
-        evaluation = evaluate_all(session, user, [draft], filters)[0]
+    for (row, _), evaluation in zip(kept, evaluations):
         hits = sorted({seasonal[i.food_id] for i in evaluation.ingredients if i.food_id in seasonal})
         out.append(DailyCard(recipe=RecipeCard(**card(evaluation, filters.servings, user.id)), origin=row.origin,
                              reasons=reasons(Pick(evaluation, 0, hits))))

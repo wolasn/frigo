@@ -109,7 +109,8 @@ def web(monkeypatch):
     monkeypatch.setattr(search_service, "WebClient", lambda: fake)
     # Cache des recherches propre au test (celui de la base contient de vraies adresses).
     cache: dict = {}
-    monkeypatch.setattr(search_service, "_cached_urls", lambda session, site, query: cache.get((site, query)))
+    monkeypatch.setattr(search_service, "_cached_many", lambda session, sites, queries: {
+        site: {q: cache.get((site, q)) for q in queries} for site in sites})
     monkeypatch.setattr(search_service, "_store_urls", lambda session, site, query, urls: cache.__setitem__((site, query), urls))
     search_service.memory.clear()
     yield fake

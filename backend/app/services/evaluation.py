@@ -91,9 +91,15 @@ class Evaluation:
         return (self.recipe.prep_minutes or 0) + (self.recipe.cook_minutes or 0)
 
 
-def _terms(session: Session, names: list[str]) -> list[Term]:
-    known = {t.name.lower(): t for t in session.scalars(select(IngredientTerm).where(
-        IngredientTerm.name.in_([n[:1].upper() + n[1:] for n in names if n])))}
+def _known_terms(session: Session, names: list[str]) -> dict[str, IngredientTerm]:
+    wanted = [n[:1].upper() + n[1:] for n in names if n]
+    if not wanted:
+        return {}
+    return {t.name.lower(): t for t in session.scalars(select(IngredientTerm).where(IngredientTerm.name.in_(wanted)))}
+
+
+def _terms(session: Session, names: list[str], known: dict[str, IngredientTerm] | None = None) -> list[Term]:
+    known = _known_terms(session, names) if known is None else known
     out = []
     for name in dict.fromkeys(n.strip() for n in names if n and n.strip()):
         term = known.get(name.lower())
@@ -109,9 +115,11 @@ def build_context(session: Session, user: User, filters: Filters, draft_ids: lis
     ):
         (ctx.allergies if reason == ExclusionReason.ALLERGY else ctx.dislikes).add(food_id)
     ctx.owned_utensils = set(session.scalars(select(UserUtensil.utensil_id).where(UserUtensil.user_id == user.id)))
-    ctx.wanted = _terms(session, filters.wanted)
     prefs = session.get(UserPreferences, user.id)
-    ctx.tolerated = _terms(session, list(prefs.tolerated_ingredients) if prefs else ["eau", "sel", "huile d'olive", "poivre"])
+    tolerated = list(prefs.tolerated_ingredients) if prefs else ["eau", "sel", "huile d'olive", "poivre"]
+    known = _known_terms(session, list(filters.wanted) + tolerated)
+    ctx.wanted = _terms(session, filters.wanted, known)
+    ctx.tolerated = _terms(session, tolerated, known)
     if draft_ids:
         ctx.meta = {m.recipe_id: m for m in session.scalars(select(UserRecipeMeta).where(
             UserRecipeMeta.user_id == user.id, UserRecipeMeta.recipe_id.in_(draft_ids)))}
