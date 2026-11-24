@@ -120,11 +120,25 @@ export default function RecipeSearch({
     }
   }
 
+  // Entre le bouton photo et la liste des ingrédients.
+  const onlyBox = (
+    <label className="mt-3 flex items-start gap-2 text-sm">
+      <input type="checkbox" className="mt-0.5 size-4 accent-brand-600" checked={only} onChange={(e) => setOnly(e.target.checked)} />
+      <span>
+        Uniquement ces ingrédients
+        <span className="block text-xs text-stone-500">
+          {tolerated.length ? `Toujours tolérés : ${tolerated.join(", ")}` : "Aucun ingrédient toléré"} (réglables dans Préférences)
+        </span>
+      </span>
+    </label>
+  );
+
   return (
     <div className={compact ? "" : "lg:grid lg:grid-cols-[16rem_minmax(0,1fr)] lg:items-start lg:gap-4"}>
       {!compact && (
         <aside className="mb-4 hidden rounded-xl border border-stone-200 bg-white p-3 lg:sticky lg:top-4 lg:block lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto dark:border-stone-800 dark:bg-stone-900">
           <PhotoButton onClick={() => setPhoto(true)} />
+          {onlyBox}
           <h2 className="mb-2 mt-3 flex items-center justify-between text-sm font-semibold">
             Ingrédients à utiliser
             {checked.length > 0 && (
@@ -140,6 +154,7 @@ export default function RecipeSearch({
       <form onSubmit={search} className="mb-4 space-y-3 rounded-xl border border-stone-200 bg-white p-4 dark:border-stone-800 dark:bg-stone-900">
         <div className={"space-y-2" + (compact ? "" : " lg:hidden")}>
           <PhotoButton onClick={() => setPhoto(true)} />
+          {onlyBox}
           <button type="button" className="block text-sm text-brand-700 hover:underline dark:text-brand-500" onClick={() => setBrowse((v) => !v)}
             aria-expanded={browse}>
             {browse ? "Masquer la liste des ingrédients ▴" : "Choisir les ingrédients par catégorie ▾"}
@@ -151,17 +166,6 @@ export default function RecipeSearch({
             </div>
           )}
         </div>
-        {checked.length > 0 && (
-          <label className="flex items-start gap-2 text-sm">
-            <input type="checkbox" className="mt-0.5 size-4 accent-brand-600" checked={only} onChange={(e) => setOnly(e.target.checked)} />
-            <span>
-              Uniquement ces ingrédients
-              <span className="block text-xs text-stone-500">
-                {tolerated.length ? `Toujours tolérés : ${tolerated.join(", ")}` : "Aucun ingrédient toléré"} (réglables dans Préférences)
-              </span>
-            </span>
-          </label>
-        )}
         <input
           className={inputClass}
           placeholder="Ou une recherche libre (« gratin », « soupe »), ou le lien d'une recette"
