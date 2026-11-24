@@ -161,3 +161,22 @@ def test_page_illisible_pas_relue(alice, web, monkeypatch):
     search(alice, ingredients=["Poireau"])
     search(alice, ingredients=["Poireau"])
     assert web.pages.count(bad.url) == 1
+
+
+def test_liste_rangee_et_complete(alice, db_session):
+    from app.services.recipes import tidy_terms
+
+    db_session.add_all([IngredientTerm(name="Testcreme legere", uses=2), IngredientTerm(name="Testcrème légère", uses=1),
+                        IngredientTerm(name="Gros bouquet de ciboulette fraiche", uses=1),
+                        IngredientTerm(name="Testfromage type st moret", uses=3),
+                        IngredientTerm(name="Testcapres facultatif", uses=2)])
+    db_session.flush()
+    tidy_terms(db_session)
+    names = {t.name: t for t in db_session.scalars(select(IngredientTerm))}
+    assert "Gros bouquet de ciboulette fraiche" not in names and names["Ciboulette"].food_id is not None
+    assert names["Testcrème légère"].uses == 3 and "Testcreme legere" not in names
+    assert "Testfromage" in names and "Testcapres" in names
+
+    groups = {g["category"]: [t["name"] for t in g["items"]] for g in alice.get("/api/ingredients/categories").json()}
+    assert "Asafoetida" in groups["Épices et aromates"]  # du catalogue, même jamais vu dans une recette
+    assert "Eau" not in [n for items in groups.values() for n in items]

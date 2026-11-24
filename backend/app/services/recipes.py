@@ -31,7 +31,16 @@ from app.models import (
 )
 from app.models.enums import Difficulty, RecipeSource, RecipeStatus, ReferenceUnit
 from app.services.health import score_from_foods, score_from_marmiton
-from app.services.ingredients import FoodMatcher, ParsedIngredient, normalize, parse_ingredient, to_reference_quantity, tokens
+from app.services.ingredients import (
+    FoodMatcher,
+    ParsedIngredient,
+    clean_name,
+    normalize,
+    original_form,
+    parse_ingredient,
+    to_reference_quantity,
+    tokens,
+)
 from app.services.sources import WebRecipe
 from app.services.utensil_detection import detect_utensils
 
@@ -266,7 +275,12 @@ def purge_unused_recipes(session: Session) -> int:
 
 
 def term_name(raw: str, food: Food | None) -> str | None:
-    name = food.name if food else parse_ingredient(raw).name
+    """Nom proposé à cocher : l'aliment du catalogue, ou le nom lu dans la recette, nettoyé et avec ses accents."""
+    if food is not None:
+        name = food.name
+    else:
+        cleaned = clean_name(parse_ingredient(raw).name)
+        name = original_form(raw, cleaned) or cleaned
     name = " ".join(name.split()).strip(" .,;:-")
     if not 2 <= len(name) <= 60 or any(ch.isdigit() for ch in name):
         return None
@@ -313,6 +327,51 @@ def rematch_ingredients(session: Session) -> int:
             changed += 1
     session.commit()
     return changed
+
+
+def tidy_terms(session: Session) -> dict[str, int]:
+    """Range la liste des ingrédients à cocher après un enrichissement du catalogue ou des règles de nettoyage :
+    les noms hors catalogue sont nettoyés et rapprochés du catalogue ; les doublons (même nom sans les accents)
+    sont fusionnés en gardant la forme accentuée."""
+    matcher = FoodMatcher(session)
+    terms = list(session.scalars(select(IngredientTerm)))
+    merged: dict[str, tuple[str, uuid.UUID | None, int]] = {}  # clé normalisée -> (nom, aliment, usages)
+    linked = renamed = 0
+    for term in terms:
+        name, food_id = term.name, term.food_id
+        if food_id is None:
+            cleaned = clean_name(normalize(name))
+            food = matcher.match(cleaned) if cleaned else None
+            if food is not None:
+                name, food_id = food.name, food.id
+                linked += 1
+            elif cleaned and cleaned != normalize(name):
+                kept = original_form(name, cleaned) or cleaned
+                name = kept[0].upper() + kept[1:]
+                renamed += 1
+        if not name:
+            continue
+        key = normalize(name)
+        if key in merged:
+            old_name, old_food, uses = merged[key]
+            # On garde le nom du catalogue, sinon la forme accentuée.
+            keep_new = (food_id is not None, not name.isascii()) > (old_food is not None, not old_name.isascii())
+            merged[key] = (name, food_id, uses + term.uses) if keep_new else (old_name, old_food, uses + term.uses)
+        else:
+            merged[key] = (name, food_id, term.uses)
+    before = len(terms)
+    session.execute(delete(IngredientTerm))
+    session.flush()
+    rows = {}
+    for name, food_id, uses in merged.values():  # deux clés différentes peuvent donner le même nom d'aliment
+        if name in rows:
+            rows[name]["uses"] += uses
+        else:
+            rows[name] = {"name": name, "food_id": food_id, "uses": uses}
+    if rows:
+        session.execute(insert(IngredientTerm).values(list(rows.values())))
+    session.commit()
+    return {"avant": before, "après": len(rows), "rattachés au catalogue": linked, "renommés": renamed}
 
 
 def recompute_catalogue_scores(session: Session) -> int:

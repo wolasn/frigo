@@ -237,14 +237,28 @@ def ingredients_by_category(session: DbSession, user: CurrentUser) -> list[TermC
         select(IngredientTerm.name, IngredientTerm.uses, FoodCategory.name)
         .outerjoin(Food, Food.id == IngredientTerm.food_id)
         .outerjoin(FoodCategory, FoodCategory.id == Food.category_id)
+        .where(or_(Food.id.is_(None), Food.is_always_infinite.is_(False)))  # pas l'eau
     ).all()
-    groups: dict[str, list[TermOut]] = {}
+    groups: dict[str, dict[str, TermOut]] = {}
     for name, uses, category in rows:
         if category is None and uses < OTHER_MIN_USES:
             continue
-        groups.setdefault(category or "Autres", []).append(TermOut(name=name, uses=uses))
-    ordered = sorted(groups.items(), key=lambda kv: (kv[0] == "Autres", -sum(t.uses for t in kv[1])))
-    return [TermCategory(category=c, items=sorted(items, key=lambda t: normalize(t.name))) for c, items in ordered]
+        group = groups.setdefault(category or "Autres", {})
+        key = normalize(name)
+        if key in group:  # « Creme » et « Crème » : une seule entrée, la forme accentuée
+            kept = group[key]
+            best = name if normalize(name) != name.lower() else kept.name
+            group[key] = TermOut(name=best, uses=kept.uses + uses)
+        else:
+            group[key] = TermOut(name=name, uses=uses)
+    # Aliments du catalogue pas encore vus dans une recette : cochables aussi (la recherche les demande aux sites).
+    for name, category in session.execute(
+        select(Food.name, FoodCategory.name).join(FoodCategory, FoodCategory.id == Food.category_id)
+        .where(Food.owner_user_id.is_(None), Food.is_always_infinite.is_(False))
+    ):
+        groups.setdefault(category, {}).setdefault(normalize(name), TermOut(name=name, uses=0))
+    ordered = sorted(groups.items(), key=lambda kv: (kv[0] == "Autres", -sum(t.uses for t in kv[1].values())))
+    return [TermCategory(category=c, items=sorted(items.values(), key=lambda t: normalize(t.name))) for c, items in ordered]
 
 
 @router.post("/recipes/import")

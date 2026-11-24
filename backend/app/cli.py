@@ -54,6 +54,7 @@ def main(argv: list[str] | None = None) -> None:
     commands.add_parser("rematch-ingredients", help="refaire le rapprochement des ingrédients des recettes web gardées")
     commands.add_parser("enrich-ingredients",
                         help="lire une sélection variée de recettes sur les sites pour enrichir la liste des ingrédients")
+    commands.add_parser("tidy-ingredients", help="ranger la liste des ingrédients à cocher (après seed-catalogue)")
     commands.add_parser("check-db", help="vérifier la base maintenant (une tentative) et alerter si besoin")
     commands.add_parser("purge", help="lancer la purge nocturne maintenant")
     commands.add_parser("daily-recipes", help="préparer les recettes du jour des comptes qui n'en ont pas encore")
@@ -115,6 +116,10 @@ def main(argv: list[str] | None = None) -> None:
                           flush=True)
             after = session.scalar(select(func.count()).select_from(IngredientTerm))
             print(f"Ingrédients à cocher : {before} → {after}")
+        elif args.command == "tidy-ingredients":
+            from app.services.recipes import tidy_terms
+
+            print("Liste des ingrédients à cocher :", tidy_terms(session))
         elif args.command == "rematch-ingredients":
             from app.services.recipes import rematch_ingredients
 

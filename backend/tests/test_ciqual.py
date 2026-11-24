@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from app.models import Food, FoodCategory, Recipe, RecipeIngredient
 from app.models.enums import Difficulty, RecipeSource, RecipeStatus, ReferenceUnit
-from app.seed.catalogue_data import CIQUAL_CODES, FOODS, WATER
+from app.seed.catalogue_data import CIQUAL_CODES, FOODS, NO_CIQUAL, WATER
 from app.seed.ciqual import apply_ciqual, ciqual_table
 from app.services.recipes import recompute_catalogue_scores
 
@@ -14,7 +14,8 @@ def test_table_et_correspondances():
     assert len(table) > 3000
     assert table[20009]["name"] == "Carotte, crue" and float(table[20009]["kcal"]) < 50
     catalogue = {name for name, *_ in FOODS} | {WATER[0]}
-    assert set(CIQUAL_CODES) == catalogue  # chaque aliment du catalogue a son équivalent
+    assert set(CIQUAL_CODES) | NO_CIQUAL == catalogue  # chaque aliment a son équivalent, sauf les exceptions listées
+    assert not set(CIQUAL_CODES) & NO_CIQUAL
     assert len(set(CIQUAL_CODES.values())) == len(CIQUAL_CODES)  # code Ciqual unique en base
     assert all(code in table and table[code]["kcal"] for code in CIQUAL_CODES.values())
 

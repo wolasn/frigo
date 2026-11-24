@@ -110,6 +110,56 @@ def parse_ingredient(raw: str) -> ParsedIngredient:
     return ParsedIngredient(raw=raw.strip(), quantity=quantity, unit=unit, name=text or normalize(raw))
 
 
+# ---------- Nom lisible d'un ingrédient (liste à cocher) ----------
+
+_LEADING_NOISE = re.compile(
+    r"^(?:(?:quelques|environ|un peu de|une?|petite?s?|grosse?s?|gros|belles?|beaux?|bonne?s?|pour (?:la|le|les)?) )*"
+    r"(?:(?:brins?|bouquets?|branches?|verres?|bouteilles?|parts?|portions?|doses?|pointes?(?: de couteau)?|gouttes?|"
+    r"morceaux?|tranches?|filets?|feuilles?|sachets?|pots?|boites?|barquettes?|poignees?|pincees?|cuilleres?|"
+    r"zestes?|rondelles?|etoiles?|bottes?|tiges?|noisettes?|traits?|rasades?|carres?|des|cubes?) (?:de |d'))?"
+)
+_TRAILING_NOISE = re.compile(
+    r"\b(?:facultatif|facultative|si possible|selon\b.*|dans mon cas.*|environ.*|quantite.*|a votre gout.*|"
+    r"au gout.*|pour\b.*|type\b.*|genre\b.*|ou\b.*|coupee?s?\b.*|eventuellement.*|frais ou surgele.*|"
+    r"bien .*|bio)$"
+)
+
+
+def clean_name(name: str) -> str:
+    """Retire d'un nom normalisé les mots qui ne sont pas l'ingrédient : « quelques brins de ciboulette »,
+    « câpres facultatif », « fromage frais type st moret », « maasdam ou cheddar »."""
+    text = name
+    for _ in range(3):
+        before = text
+        text = _LEADING_NOISE.sub("", text).strip()
+        text = re.sub(r"^(?:de |d'|du |des )", "", text).strip()
+        text = _TRAILING_NOISE.sub("", text).strip(" ,.;:-")
+        if text == before:
+            break
+    return text
+
+
+def original_form(raw: str, name: str) -> str | None:
+    """Le passage du texte d'origine (avec ses accents) qui correspond au nom normalisé, s'il s'y trouve."""
+    text = re.sub(r"\((?:s|x|es)\)", "", raw)
+    chars: list[str] = []
+    index: list[int] = []
+    for i, c in enumerate(text):
+        n = c.lower().replace("œ", "oe").replace("æ", "ae").replace("’", "'")
+        n = "".join(x for x in unicodedata.normalize("NFKD", n) if not unicodedata.combining(x))
+        n = re.sub(r"[^a-z0-9/.,' ]", " ", n)
+        for x in n:
+            if x == " " and chars and chars[-1] == " ":
+                continue
+            chars.append(x)
+            index.append(i)
+    flat = "".join(chars)
+    pos = flat.rfind(name)
+    if pos < 0 or not name:
+        return None
+    return text[index[pos]: index[pos + len(name) - 1] + 1].strip()
+
+
 class FoodMatcher:
     """Rapproche un nom d'ingrédient d'un aliment du catalogue commun, par mots-clés.
 
