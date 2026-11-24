@@ -98,6 +98,7 @@ export type SearchQuery = {
 export type SearchResult = { recipes: RecipeCard[]; errors: string[] };
 
 export type Term = { name: string; uses: number };
+export type TermCategory = { category: string; items: Term[] };
 
 export type Utensil = { id: string; name: string; category: "cooking" | "preparation" | "container"; owned: boolean; is_custom: boolean };
 
@@ -304,6 +305,7 @@ export const api = {
   categories: () => request<Category[]>("GET", "/api/food-categories"),
 
   ingredients: (q = "", limit = 30) => request<Term[]>("GET", `/api/ingredients?${query({ q, limit })}`),
+  ingredientCategories: () => request<TermCategory[]>("GET", "/api/ingredients/categories"),
   searchRecipes: (body: SearchQuery) => request<SearchResult>("POST", "/api/recipes/search", body),
   favorites: () => request<RecipeCard[]>("GET", "/api/recipes/favorites"),
   dailyRecipes: () => request<DailyRecipes>("GET", "/api/recipes/daily"),

@@ -103,6 +103,11 @@ def test_liste_des_ingredients_a_cocher(alice, menu, db_session):
     assert {t["name"] for t in alice.get("/api/ingredients", params={"q": "creme"}).json()} >= {"Crème fraîche"}  # sans accent
     assert db_session.scalar(select(IngredientTerm.uses).where(IngredientTerm.name == "Poireau")) >= 2
 
+    groups = alice.get("/api/ingredients/categories").json()
+    by_category = {g["category"]: [t["name"] for t in g["items"]] for g in groups}
+    assert "Poireau" in by_category["Légumes"] and by_category["Légumes"][0].startswith("A")
+    assert all(g["category"] != "Autres" for g in groups[:-1])  # « Autres » toujours en dernier
+
 
 def test_fiche_puis_epingle_enregistre_la_recette(alice, menu, db_session):
     url = menu["soupe"].url

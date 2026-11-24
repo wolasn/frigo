@@ -15,7 +15,7 @@ from sqlalchemy import or_, select
 
 from app.api.deps import CurrentUser, DbSession
 from app.clock import today
-from app.models import IngredientTerm, Recipe, UserRecipeMeta
+from app.models import Food, FoodCategory, IngredientTerm, Recipe, UserRecipeMeta
 from app.models.enums import Diet, Difficulty, RecipeSource, RecipeStatus, UserRole
 from app.services.ingredients import normalize
 from app.services.ai_recipes import AiError
@@ -131,6 +131,14 @@ class TermOut(BaseModel):
     uses: int
 
 
+class TermCategory(BaseModel):
+    category: str
+    items: list[TermOut]
+
+
+OTHER_MIN_USES = 2  # noms non rattachés au catalogue : seulement ceux vus plusieurs fois (les autres restent cherchables)
+
+
 class DailyCard(BaseModel):
     recipe: RecipeCard
     origin: str
@@ -219,6 +227,24 @@ def list_ingredients(session: DbSession, user: CurrentUser, q: str = "", limit: 
         rows = [(n, u) for n, u in rows if text in normalize(n)]
         rows.sort(key=lambda r: not normalize(r[0]).startswith(text))  # tri stable : l'usage départage
     return [TermOut(name=n, uses=u) for n, u in rows[:limit]]
+
+
+@router.get("/ingredients/categories")
+def ingredients_by_category(session: DbSession, user: CurrentUser) -> list[TermCategory]:
+    """Tous les ingrédients connus, rangés par catégorie du catalogue (les plus utilisées d'abord, « Autres » à la fin),
+    par ordre alphabétique dans chaque catégorie."""
+    rows = session.execute(
+        select(IngredientTerm.name, IngredientTerm.uses, FoodCategory.name)
+        .outerjoin(Food, Food.id == IngredientTerm.food_id)
+        .outerjoin(FoodCategory, FoodCategory.id == Food.category_id)
+    ).all()
+    groups: dict[str, list[TermOut]] = {}
+    for name, uses, category in rows:
+        if category is None and uses < OTHER_MIN_USES:
+            continue
+        groups.setdefault(category or "Autres", []).append(TermOut(name=name, uses=uses))
+    ordered = sorted(groups.items(), key=lambda kv: (kv[0] == "Autres", -sum(t.uses for t in kv[1])))
+    return [TermCategory(category=c, items=sorted(items, key=lambda t: normalize(t.name))) for c, items in ordered]
 
 
 @router.post("/recipes/import")

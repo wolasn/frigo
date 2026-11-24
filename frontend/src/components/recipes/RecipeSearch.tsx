@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { api, type Diet, type Difficulty, type RecipeCard, type Term } from "../../api";
+import { api, type Diet, type Difficulty, type RecipeCard, type Term, type TermCategory } from "../../api";
 import { ErrorMessage, inputClass, Loading, primaryButton, secondaryButton } from "../ui";
 import PhotoIngredients from "./PhotoIngredients";
 import RecipeCardView from "./RecipeCardView";
@@ -33,6 +33,8 @@ export default function RecipeSearch({
   const [maxHealth, setMaxHealth] = useState("");
   const [withMissingUtensils, setWithMissingUtensils] = useState(false);
   const [tolerated, setTolerated] = useState<string[]>([]);
+  const [categories, setCategories] = useState<TermCategory[] | null>(null);
+  const [browse, setBrowse] = useState(false);
   const [showFilters, setShowFilters] = useState(!compact);
   const [photo, setPhoto] = useState(false);
   const [askAi, setAskAi] = useState(false);
@@ -53,6 +55,7 @@ export default function RecipeSearch({
         setTolerated(prefs.tolerated_ingredients);
       })
       .catch(() => undefined);
+    api.ingredientCategories().then(setCategories).catch(() => setCategories([]));
   }, []);
 
   function toggle(name: string) {
@@ -118,9 +121,27 @@ export default function RecipeSearch({
   }
 
   return (
-    <div>
+    <div className={compact ? "" : "lg:grid lg:grid-cols-[16rem_minmax(0,1fr)] lg:items-start lg:gap-4"}>
+      {!compact && (
+        <aside className="mb-4 hidden rounded-xl border border-stone-200 bg-white p-3 lg:sticky lg:top-4 lg:block lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto dark:border-stone-800 dark:bg-stone-900">
+          <h2 className="mb-2 text-sm font-semibold">Tous les ingrédients</h2>
+          <IngredientCategories categories={categories} checked={checked} onToggle={toggle} />
+        </aside>
+      )}
+      <div className="min-w-0">
       <form onSubmit={search} className="mb-4 space-y-3 rounded-xl border border-stone-200 bg-white p-4 dark:border-stone-800 dark:bg-stone-900">
-        <IngredientPicker checked={checked} hidden={tolerated} onToggle={toggle} onPhoto={() => setPhoto(true)} />
+        <IngredientPicker checked={checked} onToggle={toggle} onPhoto={() => setPhoto(true)} />
+        <div className={compact ? "" : "lg:hidden"}>
+          <button type="button" className="text-sm text-brand-700 hover:underline dark:text-brand-500" onClick={() => setBrowse((v) => !v)}
+            aria-expanded={browse}>
+            {browse ? "Masquer la liste des ingrédients ▴" : "Parcourir tous les ingrédients par catégorie ▾"}
+          </button>
+          {browse && (
+            <div className="mt-2 max-h-80 overflow-y-auto rounded-lg border border-stone-200 p-2 dark:border-stone-700">
+              <IngredientCategories categories={categories} checked={checked} onToggle={toggle} />
+            </div>
+          )}
+        </div>
         {checked.length > 0 && (
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" className="mt-0.5 size-4 accent-brand-600" checked={only} onChange={(e) => setOnly(e.target.checked)} />
@@ -145,7 +166,7 @@ export default function RecipeSearch({
           </button>
         )}
         {showFilters && (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className={"grid gap-3 sm:grid-cols-2" + (compact ? "" : " 2xl:grid-cols-4")}>
             <label className="text-sm">
               <span className="mb-1 block font-medium">Personnes</span>
               <input type="number" min={1} max={999} value={servings} className={inputClass}
@@ -263,25 +284,72 @@ export default function RecipeSearch({
         </section>
       )}
       {photo && <PhotoIngredients onFound={addAll} onClose={() => setPhoto(false)} />}
+      </div>
     </div>
   );
 }
 
-/** Ingrédients à cocher : recherche dans la liste (noms vus dans les recettes des sites), les plus courants, photo. */
-function IngredientPicker({ checked, hidden, onToggle, onPhoto }: {
+/** Tous les ingrédients connus, par catégorie du catalogue ; chaque catégorie se replie. */
+function IngredientCategories({ categories, checked, onToggle }: {
+  categories: TermCategory[] | null;
   checked: string[];
-  hidden: string[]; // ingrédients toujours tolérés : inutile de les proposer
   onToggle: (name: string) => void;
-  onPhoto: () => void;
 }) {
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  if (categories === null) return <Loading inline />;
+  if (categories.length === 0) return <p className="text-sm text-stone-500">Aucun ingrédient connu pour l'instant.</p>;
+
+  function flip(category: string) {
+    setOpen((current) => {
+      const next = new Set(current);
+      if (next.has(category)) next.delete(category);
+      else next.add(category);
+      return next;
+    });
+  }
+
+  return (
+    <ul className="space-y-0.5">
+      {categories.map(({ category, items }) => {
+        const count = items.filter((t) => checked.includes(t.name)).length;
+        const isOpen = open.has(category);
+        return (
+          <li key={category}>
+            <button type="button" onClick={() => flip(category)} aria-expanded={isOpen}
+              className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm font-medium hover:bg-stone-100 dark:hover:bg-stone-800">
+              <span className="flex items-center gap-1.5">
+                <span className="w-3 text-stone-400">{isOpen ? "▾" : "▸"}</span>
+                {category}
+              </span>
+              <span className="flex items-center gap-1.5 text-xs">
+                {count > 0 && <span className="rounded-full bg-brand-600 px-1.5 text-white">{count}</span>}
+                <span className="text-stone-400">{items.length}</span>
+              </span>
+            </button>
+            {isOpen && (
+              <ul className="mb-1 ml-5 space-y-0.5">
+                {items.map((t) => (
+                  <li key={t.name}>
+                    <label className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-sm hover:bg-stone-50 dark:hover:bg-stone-800">
+                      <input type="checkbox" className="size-4 accent-brand-600" checked={checked.includes(t.name)} onChange={() => onToggle(t.name)} />
+                      {t.name}
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** Ingrédients à cocher : recherche dans la liste (noms vus dans les recettes des sites), cochés, photo. */
+function IngredientPicker({ checked, onToggle, onPhoto }: { checked: string[]; onToggle: (name: string) => void; onPhoto: () => void }) {
   const [query, setQuery] = useState("");
-  const [popular, setPopular] = useState<Term[]>([]);
   const [suggestions, setSuggestions] = useState<Term[]>([]);
   const timer = useRef<number | undefined>(undefined);
-
-  useEffect(() => {
-    api.ingredients("", 24).then(setPopular).catch(() => setPopular([]));
-  }, []);
 
   useEffect(() => {
     window.clearTimeout(timer.current);
@@ -340,16 +408,6 @@ function IngredientPicker({ checked, hidden, onToggle, onPhoto }: {
           </ul>
         )}
       </div>
-      {popular.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {popular.filter((t) => !checked.includes(t.name) && !hidden.some((h) => h.toLowerCase() === t.name.toLowerCase())).slice(0, 18).map((t) => (
-            <button key={t.name} type="button" onClick={() => onToggle(t.name)}
-              className="rounded-full border border-stone-300 px-2.5 py-0.5 text-xs text-stone-700 hover:border-brand-500 dark:border-stone-700 dark:text-stone-300">
-              + {t.name}
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
