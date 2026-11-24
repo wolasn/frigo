@@ -9,6 +9,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import CurrentUser, DbSession
+from app.clock import today
 from app.models import AgendaMember, Food, FoodCategory, SharedAgenda, ShoppingListItem, User
 from app.models.enums import ShoppingOrigin
 from app.services.shopping import ShelfLife, freeze_from, lock_list, meal_titles, regenerate
@@ -36,12 +37,14 @@ class LineOut(BaseModel):
     expiry_risk: bool
     meals: list[MealRef]
     freeze_from: date | None = None  # « ou au plus tôt ce jour-là, et congeler »
+    purchased: bool = False
 
 
 class ShoppingListOut(BaseModel):
     id: str  # « personal » ou l'identifiant de l'agenda partagé
     name: str
-    lines: list[LineOut]
+    lines: list[LineOut]  # à acheter
+    purchased: list[LineOut] = []  # achetés : pour un repas à venir, ou ajoutés à la main (jusqu'à leur suppression)
 
 
 class ManualIn(BaseModel):
@@ -64,7 +67,10 @@ def shared_agendas(session: Session, user: User) -> list[SharedAgenda]:
     ))
 
 
-def _lines(session: Session, user: User, shared_agenda_id: uuid.UUID | None, shelf: ShelfLife | None = None) -> list[LineOut]:
+def _lines(session: Session, user: User, shared_agenda_id: uuid.UUID | None, shelf: ShelfLife | None = None,
+           purchased: bool = False) -> list[LineOut]:
+    """Lignes à acheter ; ou, avec purchased, lignes achetées encore utiles : un article de l'agenda tant qu'un de ses
+    repas est à venir (repas passé ou supprimé : il disparaît), un article ajouté à la main jusqu'à sa suppression."""
     scope = (
         (ShoppingListItem.shared_agenda_id == shared_agenda_id)
         if shared_agenda_id
@@ -74,9 +80,13 @@ def _lines(session: Session, user: User, shared_agenda_id: uuid.UUID | None, she
         select(ShoppingListItem, FoodCategory.aisle, Food)
         .outerjoin(Food, Food.id == ShoppingListItem.food_id)
         .outerjoin(FoodCategory, FoodCategory.id == Food.category_id)
-        .where(scope, ShoppingListItem.purchased_at.is_(None))
+        .where(scope, ShoppingListItem.purchased_at.is_not(None) if purchased else ShoppingListItem.purchased_at.is_(None))
     ).all()
     titles = meal_titles(session, [item.id for item, _, _ in rows])
+    if purchased:
+        now = today()
+        titles = {k: [(t, d) for t, d in v if d >= now] for k, v in titles.items()}
+        rows = [r for r in rows if r[0].origin == ShoppingOrigin.MANUAL or titles.get(r[0].id)]
     shelf = shelf or ShelfLife(session)
     lines = []
     for item, aisle, food in rows:  # l'aliment vient de la même requête : pas une lecture par ligne
@@ -88,7 +98,8 @@ def _lines(session: Session, user: User, shared_agenda_id: uuid.UUID | None, she
             quantity=float(item.quantity) if item.quantity is not None else None, unit=item.unit,
             aisle=aisle or OTHER_AISLE, recommended_purchase_on=item.recommended_purchase_on,
             is_perishable=item.is_perishable, expiry_risk=item.expiry_risk,
-            meals=[MealRef(title=t, meal_date=d) for t, d in meals], freeze_from=freeze,
+            meals=[MealRef(title=t, meal_date=d) for t, d in meals], freeze_from=freeze if not purchased else None,
+            purchased=purchased,
         ))
     lines.sort(key=lambda l: (l.aisle == OTHER_AISLE, l.aisle, l.label.lower()))
     return lines
@@ -103,9 +114,11 @@ def list_shopping(session: DbSession, user: CurrentUser) -> list[ShoppingListOut
     for agenda in sorted(agendas, key=lambda a: str(a.id)):  # verrous toujours dans le même ordre (voir purchase)
         regenerate(session, user, agenda.id, shelf)
     session.commit()
-    result = [ShoppingListOut(id="personal", name="Ma liste", lines=_lines(session, user, None, shelf))]
+    result = [ShoppingListOut(id="personal", name="Ma liste", lines=_lines(session, user, None, shelf),
+                              purchased=_lines(session, user, None, shelf, purchased=True))]
     for agenda in agendas:
-        result.append(ShoppingListOut(id=str(agenda.id), name=agenda.name, lines=_lines(session, user, agenda.id, shelf)))
+        result.append(ShoppingListOut(id=str(agenda.id), name=agenda.name, lines=_lines(session, user, agenda.id, shelf),
+                                      purchased=_lines(session, user, agenda.id, shelf, purchased=True)))
     return result
 
 
@@ -121,9 +134,9 @@ def add_manual(body: ManualIn, session: DbSession, user: CurrentUser) -> LineOut
                    aisle=OTHER_AISLE, recommended_purchase_on=None, is_perishable=False, expiry_risk=False, meals=[])
 
 
-def _get_line(session: Session, user: User, line_id: uuid.UUID) -> ShoppingListItem:
+def _get_line(session: Session, user: User, line_id: uuid.UUID, purchased_ok: bool = False) -> ShoppingListItem:
     item = session.get(ShoppingListItem, line_id)
-    if item is None or item.purchased_at is not None:
+    if item is None or (item.purchased_at is not None and not purchased_ok):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Ligne introuvable.")
     if item.shared_agenda_id:
         if session.get(AgendaMember, (item.shared_agenda_id, user.id)) is None:
@@ -135,7 +148,7 @@ def _get_line(session: Session, user: User, line_id: uuid.UUID) -> ShoppingListI
 
 @router.delete("/{line_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_manual(line_id: uuid.UUID, session: DbSession, user: CurrentUser) -> None:
-    item = _get_line(session, user, line_id)
+    item = _get_line(session, user, line_id, purchased_ok=True)  # un article manuel, acheté ou non
     if item.origin != ShoppingOrigin.MANUAL:
         raise HTTPException(
             status.HTTP_409_CONFLICT,

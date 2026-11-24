@@ -72,7 +72,7 @@ export default function ShoppingPage() {
     try {
       const result = await api.purchase(selected.map((l) => l.id));
       setChecked(new Set());
-      setMessage(`${result.removed_from_list} article(s) acheté(s), retiré(s) de la liste.`);
+      setMessage(`${result.removed_from_list} article(s) passé(s) dans « Acheté ».`);
       load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Validation impossible.");
@@ -120,7 +120,8 @@ export default function ShoppingPage() {
 
       <p className="mb-4 text-sm text-stone-600 dark:text-stone-400">
         La liste réunit tous les ingrédients des repas prévus dans l'agenda à partir d'aujourd'hui (sauf l'eau). Coche ce que tu as
-        acheté ou ce que tu as déjà, puis valide : ces articles quittent la liste pour ces repas.
+        acheté ou ce que tu as déjà, puis valide : ces articles passent dans « Acheté », jusqu'à ce que leur repas soit passé ou
+        retiré.
       </p>
 
       <ErrorMessage message={error} />
@@ -135,56 +136,37 @@ export default function ShoppingPage() {
 
       {list === null ? (
         <Loading label="Calcul de la liste de courses…" />
-      ) : list.lines.length === 0 ? (
+      ) : list.lines.length === 0 && list.purchased.length === 0 ? (
         <div className="rounded-xl border border-dashed border-stone-300 p-8 text-center text-stone-600 dark:border-stone-700 dark:text-stone-400">
           Rien à acheter pour les repas prévus. Programme des repas dans l'agenda : leurs ingrédients apparaîtront ici.
         </div>
       ) : (
         <div className="space-y-5">
+          {list.lines.length === 0 && (
+            <p className="rounded-xl border border-dashed border-stone-300 p-4 text-center text-sm text-stone-600 dark:border-stone-700 dark:text-stone-400">
+              Tout est acheté pour les repas prévus.
+            </p>
+          )}
           {groups.map(([aisle, lines]) => (
             <section key={aisle}>
               <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-stone-500">{aisle}</h2>
               <ul className="divide-y divide-stone-200 overflow-hidden rounded-xl border border-stone-200 bg-white dark:divide-stone-800 dark:border-stone-800 dark:bg-stone-900">
-                {lines.map((line) => {
-                  const advice = recommendation(line);
-                  return (
-                    <li key={line.id} className="flex items-start gap-3 px-4 py-3">
-                      <input
-                        type="checkbox"
-                        checked={checked.has(line.id)}
-                        onChange={() => toggle(line.id)}
-                        className="mt-1 size-5 shrink-0 accent-brand-600"
-                        aria-label={`Acheté : ${line.label}`}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className={"font-medium " + (checked.has(line.id) ? "line-through opacity-60" : "")}>
-                          {line.label}
-                          {line.quantity !== null && line.unit && (
-                            <span className="font-normal text-stone-600 dark:text-stone-400"> · {formatQuantity(line.quantity, line.unit)}</span>
-                          )}
-                          {line.food_id && line.quantity === null && <span className="font-normal text-stone-500"> · quantité à préciser</span>}
-                          {line.is_perishable && (
-                            <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-                              périssable
-                            </span>
-                          )}
-                        </p>
-                        {line.meals.length > 0 && (
-                          <p className="text-xs text-stone-500">Pour : {line.meals.map((m) => `${m.title} (${formatDate(m.meal_date)})`).join(", ")}</p>
-                        )}
-                        {advice && <p className={"text-xs font-medium " + advice.style}>{advice.text}</p>}
-                      </div>
-                      {line.origin === "manual" && (
-                        <button onClick={() => removeLine(line)} className="text-xs text-stone-500 hover:text-red-600">
-                          Retirer
-                        </button>
-                      )}
-                    </li>
-                  );
-                })}
+                {lines.map((line) => (
+                  <LineRow key={line.id} line={line} done={checked.has(line.id)} onToggle={() => toggle(line.id)} onRemove={() => removeLine(line)} />
+                ))}
               </ul>
             </section>
           ))}
+          {list.purchased.length > 0 && (
+            <section>
+              <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-stone-500">Acheté · {list.purchased.length}</h2>
+              <ul className="divide-y divide-stone-200 overflow-hidden rounded-xl border border-stone-200 bg-white dark:divide-stone-800 dark:border-stone-800 dark:bg-stone-900">
+                {list.purchased.map((line) => (
+                  <LineRow key={line.id} line={line} done onRemove={() => removeLine(line)} />
+                ))}
+              </ul>
+            </section>
+          )}
         </div>
       )}
 
@@ -200,5 +182,50 @@ export default function ShoppingPage() {
       )}
 
     </div>
+  );
+}
+
+/** Une ligne : barrée quand elle est cochée ou achetée ; poubelle pour un article ajouté à la main. */
+function LineRow({ line, done, onToggle, onRemove }: { line: ShoppingLine; done: boolean; onToggle?: () => void; onRemove: () => void }) {
+  const advice = line.purchased ? null : recommendation(line);
+  return (
+    <li className="flex items-start gap-3 px-4 py-3">
+      <input
+        type="checkbox"
+        checked={done}
+        onChange={onToggle}
+        disabled={!onToggle}
+        className="mt-1 size-5 shrink-0 accent-brand-600 disabled:opacity-60"
+        aria-label={`Acheté : ${line.label}`}
+      />
+      <div className="min-w-0 flex-1">
+        <p className={"font-medium " + (done ? "line-through opacity-60" : "")}>
+          {line.label}
+          {line.quantity !== null && line.unit && (
+            <span className="font-normal text-stone-600 dark:text-stone-400"> · {formatQuantity(line.quantity, line.unit)}</span>
+          )}
+          {line.food_id && line.quantity === null && <span className="font-normal text-stone-500"> · quantité à préciser</span>}
+          {line.is_perishable && !line.purchased && (
+            <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+              périssable
+            </span>
+          )}
+        </p>
+        {line.meals.length > 0 && (
+          <p className={"text-xs text-stone-500 " + (done ? "opacity-60" : "")}>
+            Pour : {line.meals.map((m) => `${m.title} (${formatDate(m.meal_date)})`).join(", ")}
+          </p>
+        )}
+        {advice && <p className={"text-xs font-medium " + advice.style}>{advice.text}</p>}
+      </div>
+      {line.origin === "manual" && (
+        <button onClick={onRemove} className="rounded p-1 text-stone-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-stone-800"
+          aria-label={`Supprimer ${line.label}`} title="Supprimer">
+          <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6" />
+          </svg>
+        </button>
+      )}
+    </li>
   );
 }

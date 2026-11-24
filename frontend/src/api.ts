@@ -160,9 +160,10 @@ export type ShoppingLine = {
   expiry_risk: boolean;
   meals: { title: string; meal_date: string }[];
   freeze_from: string | null;
+  purchased?: boolean;
 };
 
-export type ShoppingList = { id: string; name: string; lines: ShoppingLine[] };
+export type ShoppingList = { id: string; name: string; lines: ShoppingLine[]; purchased: ShoppingLine[] };
 
 export type Role = "admin" | "contributor" | "member";
 

@@ -84,3 +84,30 @@ def test_liste_d_un_agenda_partage(client, env):
     assert [l["name"] for l in lists] == ["Ma liste", "Coloc"]
     assert client.post("/api/shopping/manual", json={"label": "Sopalin", "shared_agenda_id": agenda["id"]}).status_code == 201
     assert [l["label"] for l in client.get("/api/shopping").json()[1]["lines"]] == ["Sopalin"]
+
+
+def bought(client):
+    return {l["label"]: l for l in client.get("/api/shopping").json()[0]["purchased"]}
+
+
+def test_achetes_dans_leur_categorie_tant_que_le_repas_est_a_venir(client, env):
+    meal = env["plan"]("puree", 1)
+    carrot = personal_lines(client)["Carotte"]
+    client.post("/api/shopping/purchase", json={"ids": [carrot["id"]]})
+    assert bought(client)["Carotte"]["purchased"] is True and "Carotte" not in personal_lines(client)
+    client.patch(f"/api/agenda/{meal['id']}", json={"meal_date": day(-1)})  # repas passé : l'article disparaît
+    assert "Carotte" not in bought(client)
+
+    meal = env["plan"]("puree", 2)
+    client.post("/api/shopping/purchase", json={"ids": [personal_lines(client)["Carotte"]["id"]]})
+    assert "Carotte" in bought(client)
+    client.delete(f"/api/agenda/{meal['id']}")  # repas supprimé : aussi
+    assert "Carotte" not in bought(client)
+
+
+def test_article_manuel_achete_supprimable(client, env):
+    line = client.post("/api/shopping/manual", json={"label": "Piles"}).json()
+    client.post("/api/shopping/purchase", json={"ids": [line["id"]]})
+    assert "Piles" in bought(client) and "Piles" not in personal_lines(client)
+    assert client.delete(f"/api/shopping/{line['id']}").status_code == 204
+    assert "Piles" not in bought(client)
