@@ -4,104 +4,73 @@ Lancé par agent/outils.sh dans un conteneur de l'application (même base que le
 tâches planifiées. Chaque commande affiche du JSON. Le choix final n'accepte que des recettes que
 l'application juge acceptables (régime, allergies, ustensiles, pas de répétition, pas de dessert).
 
-    comptes                              comptes actifs (connectés ces 30 derniers jours)
-    contexte  <compte>                   profil, inventaire, historique et menu actuel
-    chercher  <compte> <texte> [limite]  recettes acceptables de la base (texte vide : les meilleures)
-    marmiton  <compte> <recherche>       recherche Marmiton (importe dans la base), recettes acceptables
-    detail    <compte> <recette_id>      ingrédients (en stock ou à acheter) et étapes
-    definir   <compte> <id1> <id2> <id3> remplace les recettes du jour de ce compte
+Une recette se désigne par sa référence (« ref ») : l'adresse de sa page sur un site, ou l'id d'une
+recette en base (recettes maison, épinglées, en favori).
+
+    comptes                                comptes actifs (connectés ces 30 derniers jours)
+    contexte  <compte>                     profil, saison, historique, agenda et menu actuel
+    chercher  <compte> <texte> [limite]    recherche sur les sites et dans les recettes du compte
+    detail    <compte> <ref>               ingrédients et étapes
+    definir   <compte> <ref1> <ref2> <ref3> remplace les recettes du jour de ce compte
 """
 
 import json
-import random
 import sys
 import unicodedata
-import uuid
 from datetime import datetime, timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from app.clock import APP_TIMEZONE, today
 from app.db import get_engine
 from app.models import (
+    AgendaMember,
     DailyRecipe,
     Food,
-    InventoryItem,
     PlannedMeal,
     Recipe,
-    RecipeIngredient,
-    RecipeStep,
+    SharedAgenda,
     User,
     UserExcludedFood,
-    UserInfiniteFood,
     UserPreferences,
-    UserRecipeMeta,
     UserUtensil,
     Utensil,
 )
-from app.models.enums import ExclusionReason, ItemKind, RecipeSource
+from app.models.enums import ExclusionReason
 from app.services import daily, season
-from app.services.marmiton import MarmitonError
-from app.services.proposals import default_inventory_ids, propose
-from app.services.recipes import search_marmiton, visible_recipes_clause
-from app.services.shopping import display_quantity
+from app.services.search import get_draft, normalize_query, web_drafts
+from app.services.sources import SITES, SourceError
 
 WEEKDAYS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 DIFFICULTY = {"easy": "facile", "medium": "moyenne", "hard": "difficile"}
+ORIGIN = {"web": "site de recettes", "base": "recette du compte", "ia": "inventée par l'IA", "agent": "choisie par l'agent"}
 
 
 class Erreur(Exception):
     pass
 
 
-def candidates(session: Session, user: User, day, only: set[uuid.UUID] | None = None) -> list[daily.Pick]:
-    """Recettes acceptables aujourd'hui, les mieux classées d'abord (même classement que l'automatisation)."""
-    seasonal = daily._food_ids(session, season.in_season(day, fruits=False))
-    off_season = set(daily._food_ids(session, season.out_of_season(day)))
-    excluded = daily._excluded(session, user, day)
-    rng = random.Random(f"{user.id}:{day.isoformat()}")
-    picks = []
-    for e in propose(session, user, daily._options(session, user, day), limit=10**6):
-        r = e.recipe
-        if (only is not None and r.id not in only) or r.id in excluded or not daily.looks_like_a_meal(r.title):
-            continue
-        foods = {i.food_id for i in e.ingredients if i.food_id and i.status != "infinite"}
-        hits = [seasonal[f] for f in foods if f in seasonal]
-        rating = e.meta.rating if e.meta and e.meta.rating else 3
-        score = (3 * min(len(hits), 3) - 2 * len(foods & off_season) + 3 * len(e.expiring_used)
-                 - 0.75 * min(e.missing_count, 8) - 4 * len(e.disliked) + (rating - 3)
-                 + 0.3 * float(r.health_score or 0) + rng.uniform(0, 2))
-        picks.append(daily.Pick(e, score, sorted(hits)))
-    picks.sort(key=lambda p: -p.score)
-    return picks
+def plain(text: str) -> str:
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().lower()
 
 
 def summary(pick: daily.Pick) -> dict:
     e, r = pick.evaluation, pick.evaluation.recipe
     return {
-        "recette_id": str(r.id), "titre": r.title,
-        "source": {RecipeSource.MARMITON: "marmiton", RecipeSource.AI: "ia"}.get(r.source, "personnelle"),
-        "temps_total_min": ((r.prep_minutes or 0) + (r.cook_minutes or 0)) or None,
+        "ref": daily.key(pick.draft), "titre": r.title,
+        "site": SITES[r.site].label if r.site in SITES else ("maison" if pick.origin == "base" else pick.origin),
+        "temps_total_min": e.minutes or None,
         "difficulte": DIFFICULTY.get(r.difficulty.value) if r.difficulty else None,
-        "vegetarienne": r.is_vegetarian,
+        "vegetarienne": bool(r.is_vegetarian),
         "score_sante_sur_10": float(r.health_score) if r.health_score is not None else None,
+        "note_du_site": pick.draft.rating,
         "note_du_compte": e.meta.rating if e.meta and e.meta.rating else None,
-        "de_saison": pick.seasonal, "utilise_ce_qui_perime_bientot": e.expiring_used,
-        "a_acheter": e.missing, "aliments_non_aimes": e.disliked,
+        "favori": bool(e.meta and e.meta.is_favorite),
+        "de_saison": pick.seasonal,
+        "ingredients": list(dict.fromkeys(i.name for i in e.ingredients if not i.optional))[:12],
+        "aliments_non_aimes": e.disliked,
     }
-
-
-def quantity_text(item: InventoryItem, food: Food | None) -> str:
-    """Quantité lisible : en base elle est dans l'unité de référence de l'aliment (g, ml, pièce)."""
-    if item.kind == ItemKind.LEFTOVER or food is None:
-        return f"{item.quantity.normalize():f} portion(s)"
-    quantity, unit = display_quantity(food, item.quantity)
-    return f"{quantity:f} {unit}"
-
-
-def plain(text: str) -> str:
-    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().lower()
 
 
 def account(session: Session, username: str) -> User:
@@ -111,11 +80,14 @@ def account(session: Session, username: str) -> User:
     return user
 
 
-def recipe_id(value: str) -> uuid.UUID:
+def draft_for(session: Session, user: User, ref: str):
     try:
-        return uuid.UUID(value)
-    except ValueError:
-        raise Erreur(f"Identifiant de recette invalide : {value}") from None
+        draft = get_draft(session, user, ref)
+    except SourceError as error:
+        raise Erreur(f"Page illisible ({ref}) : {error}") from None
+    if draft is None:
+        raise Erreur(f"Recette introuvable : {ref}")
+    return draft
 
 
 # ---------- Commandes ----------
@@ -129,36 +101,25 @@ def comptes(session: Session) -> dict:
 
 def contexte(session: Session, user: User) -> dict:
     day = today()
-    if not daily.stored(session, user, day):
-        daily.choose(session, user, day)  # l'automatisation n'est pas encore passée pour ce compte
+    rows = daily.stored(session, user, day) or daily.choose(session, user, day)  # automatisation pas encore passée
     prefs = session.get(UserPreferences, user.id)
     exclusions = session.execute(select(Food.name, UserExcludedFood.reason).join(Food, Food.id == UserExcludedFood.food_id)
                                  .where(UserExcludedFood.user_id == user.id)).all()
-    basics = session.scalars(select(Food.name).where(Food.is_always_infinite.is_(True) | Food.id.in_(
-        select(UserInfiniteFood.food_id).where(UserInfiniteFood.user_id == user.id)))).all()
     utensils = session.scalars(select(Utensil.name).join(UserUtensil, UserUtensil.utensil_id == Utensil.id)
                                .where(UserUtensil.user_id == user.id)).all()
 
-    items = session.execute(select(InventoryItem, Food).outerjoin(Food, Food.id == InventoryItem.food_id).where(
-        InventoryItem.inventory_id.in_(default_inventory_ids(session, user)), InventoryItem.archived_at.is_(None),
-    ).order_by(InventoryItem.expires_on).limit(80)).all()
-
-    past = session.execute(select(DailyRecipe.day, Recipe.title).join(Recipe, Recipe.id == DailyRecipe.recipe_id).where(
+    past = session.execute(select(DailyRecipe.day, DailyRecipe.snapshot).where(
         DailyRecipe.user_id == user.id, DailyRecipe.day >= day - timedelta(days=daily.NO_REPEAT_DAYS),
         DailyRecipe.day < day).order_by(DailyRecipe.day.desc(), DailyRecipe.position)).all()
-    cooked = session.execute(select(UserRecipeMeta.last_cooked_on, Recipe.title).join(
-        Recipe, Recipe.id == UserRecipeMeta.recipe_id).where(
-        UserRecipeMeta.user_id == user.id,
-        UserRecipeMeta.last_cooked_on >= day - timedelta(days=daily.COOKED_RECENTLY_DAYS))).all()
-    planned = session.execute(select(PlannedMeal.meal_date, PlannedMeal.slot, Recipe.title).join(
-        Recipe, Recipe.id == PlannedMeal.recipe_id).where(
-        PlannedMeal.user_id == user.id, PlannedMeal.meal_date.between(day - timedelta(days=7), day + timedelta(days=7))
-    ).order_by(PlannedMeal.meal_date)).all()
-
-    rows = daily.stored(session, user, day)
-    picks = {p.evaluation.recipe.id: p for p in candidates(session, user, day, only={r.recipe_id for r in rows})}
-    current = [{**summary(picks[r.recipe_id]), "raisons_de_l_automatisation": daily.reasons(
-        picks[r.recipe_id].evaluation, day, r.origin)} for r in rows if r.recipe_id in picks]
+    shared = select(AgendaMember.agenda_id).where(AgendaMember.user_id == user.id)
+    planned = session.execute(
+        select(PlannedMeal.meal_date, PlannedMeal.slot, Recipe.title, SharedAgenda.name)
+        .join(Recipe, Recipe.id == PlannedMeal.recipe_id)
+        .outerjoin(SharedAgenda, SharedAgenda.id == PlannedMeal.shared_agenda_id)
+        .where(PlannedMeal.meal_date.between(day - timedelta(days=daily.NO_REPEAT_DAYS), day + timedelta(days=daily.PLANNED_AHEAD_DAYS)),
+               or_((PlannedMeal.user_id == user.id) & PlannedMeal.shared_agenda_id.is_(None),
+                   PlannedMeal.shared_agenda_id.in_(shared)))
+        .order_by(PlannedMeal.meal_date)).all()
 
     return {
         "date": day.isoformat(), "jour": WEEKDAYS[day.weekday()], "compte": user.username, "nom": user.display_name,
@@ -166,91 +127,75 @@ def contexte(session: Session, user: User) -> dict:
             "regime": prefs.diet.value if prefs else "none", "personnes": prefs.default_servings if prefs else 2,
             "allergies": [n for n, r in exclusions if r == ExclusionReason.ALLERGY],
             "n_aime_pas": [n for n, r in exclusions if r != ExclusionReason.ALLERGY],
-            "ustensiles": list(utensils), "toujours_disponibles": list(basics),
+            "ustensiles": list(utensils),
         },
         "saison": {
             "legumes_et_produits_de_la_mer": season.in_season(day, fruits=False),
             "fruits": [f for f in season.in_season(day) if f in season.FRUITS],
+            "recherches_de_saison_suggerees": daily.queries_for_day(day, 6),
         },
-        "inventaire": [{
-            "aliment": item.leftover_name if item.kind == ItemKind.LEFTOVER or food is None else food.name,
-            "reste_d_un_plat": item.kind == ItemKind.LEFTOVER,
-            "quantite": quantity_text(item, food),
-            "jours_restants": (item.expires_on - day).days,
-        } for item, food in items],
         "historique": {
-            "recettes_du_jour_precedentes": [{"date": d.isoformat(), "titre": t} for d, t in past],
-            "cuisinees_recemment": [{"date": d.isoformat(), "titre": t} for d, t in cooked],
-            "agenda": [{"date": d.isoformat(), "repas": s.value, "titre": t} for d, s, t in planned],
+            "recettes_du_jour_precedentes": [{"date": d.isoformat(), "titre": s.get("title")} for d, s in past],
+            "agenda": [{"date": d.isoformat(), "repas": s.value, "titre": t, **({"agenda_partage": a} if a else {})}
+                       for d, s, t, a in planned],
         },
-        "menu_actuel": current,
+        "menu_actuel": [{
+            "ref": r.recipe_ref, "titre": r.snapshot.get("title"),
+            "site": SITES[r.snapshot["site"]].label if r.snapshot.get("site") in SITES else None,
+            "temps_total_min": ((r.snapshot.get("prep_minutes") or 0) + (r.snapshot.get("cook_minutes") or 0)) or None,
+            "vegetarienne": r.snapshot.get("is_vegetarian"), "note_du_site": r.snapshot.get("rating"),
+            "choisie_par": ORIGIN.get(r.origin, r.origin),
+        } for r in rows],
     }
 
 
 def chercher(session: Session, user: User, texte: str, limite: str = "10") -> dict:
     limit = max(1, min(int(limite), 20))
-    words = plain(texte).split()
-    found = []
-    for pick in candidates(session, user, today()):
-        text = plain(pick.evaluation.recipe.title + " " + " ".join(i.name for i in pick.evaluation.ingredients))
-        if all(w in text for w in words):
-            found.append(summary(pick))
-            if len(found) >= limit:
-                break
-    return {"recettes": found}
-
-
-def marmiton(session: Session, user: User, recherche: str) -> dict:
-    recherche = recherche.strip()[:80]
-    if len(recherche) < 2:
+    texte = texte.strip()[:80]
+    if len(texte) < 2:
         raise Erreur("Recherche trop courte.")
-    try:
-        ids = search_marmiton(session, recherche, limit=4)
-    except MarmitonError as error:
-        raise Erreur(f"Marmiton ne répond pas : {error}") from None
-    picks = candidates(session, user, today(), only=set(ids))
-    return {"trouvees": len(ids), "ecartees": len(ids) - len(picks), "recettes": [summary(p) for p in picks]}
+    drafts, errors = web_drafts(session, [texte])
+    words = plain(normalize_query(texte)).split()
+    seen = {daily.key(d) for d in drafts}
+    drafts += [d for d in daily.account_drafts(session, user)
+               if daily.key(d) not in seen and all(w in plain(d.recipe.title) for w in words)]
+    picks = daily.candidates(session, user, today(), drafts)
+    out = {"trouvees": len(drafts), "acceptables": len(picks), "recettes": [summary(p) for p in picks[:limit]]}
+    if errors:
+        out["erreurs_des_sites"] = errors[:3]
+    return out
 
 
-def detail(session: Session, user: User, rid: str) -> dict:
-    recipe = session.scalar(select(Recipe).where(Recipe.id == recipe_id(rid), visible_recipes_clause(user)))
-    if recipe is None:
-        raise Erreur("Recette introuvable.")
-    picks = candidates(session, user, today(), only={recipe.id})
-    states = {i.id: i.status for i in picks[0].evaluation.ingredients} if picks else {}
-    ingredients = session.scalars(select(RecipeIngredient).where(RecipeIngredient.recipe_id == recipe.id)
-                                  .order_by(RecipeIngredient.position)).all()
-    steps = session.scalars(select(RecipeStep.instruction).where(RecipeStep.recipe_id == recipe.id)
-                            .order_by(RecipeStep.position)).all()
-    return {"titre": recipe.title, "acceptable_aujourd_hui": bool(picks), "personnes": recipe.servings,
-            "preparation_min": recipe.prep_minutes, "cuisson_min": recipe.cook_minutes,
-            "ingredients": [{"texte": i.raw_text, "etat": states.get(i.id)} for i in ingredients],
-            "etapes": [s[:300] for s in steps[:12]]}
+def detail(session: Session, user: User, ref: str) -> dict:
+    draft = draft_for(session, user, ref)
+    r = draft.recipe
+    picks = daily.candidates(session, user, today(), [draft])
+    return {
+        "ref": daily.key(draft), "titre": r.title, "acceptable_aujourd_hui": bool(picks),
+        "personnes": r.servings, "preparation_min": r.prep_minutes, "cuisson_min": r.cook_minutes,
+        "ingredients": [i.raw_text for i, _ in draft.ingredients],
+        "etapes": [s[:300] for s in draft.steps[:12]],
+    }
 
 
-def definir(session: Session, user: User, *ids: str) -> dict:
+def definir(session: Session, user: User, *refs: str) -> dict:
     day = today()
-    chosen = [recipe_id(i) for i in ids]
-    if len(chosen) != daily.PICKS or len(set(chosen)) != daily.PICKS:
+    if len(refs) != daily.PICKS or len(set(refs)) != daily.PICKS:
         raise Erreur(f"Il faut exactement {daily.PICKS} recettes différentes.")
-    acceptable = {p.evaluation.recipe.id: p.evaluation.recipe for p in candidates(session, user, day, only=set(chosen))}
-    refused = [str(i) for i in chosen if i not in acceptable]
+    drafts = [draft_for(session, user, ref) for ref in refs]
+    acceptable = {daily.key(p.draft): p for p in daily.candidates(session, user, day, drafts)}
+    refused = [ref for ref, d in zip(refs, drafts) if daily.key(d) not in acceptable]
     if refused:
-        raise Erreur("Recettes non acceptables aujourd'hui (exclues, introuvables ou déjà proposées) : "
-                     + ", ".join(refused))
-    before = [session.get(Recipe, r.recipe_id).title for r in daily.stored(session, user, day)]
-    start_of_day = datetime.combine(day, datetime.min.time(), tzinfo=APP_TIMEZONE)
+        raise Erreur("Recettes non acceptables aujourd'hui (exclues, desserts ou déjà proposées) : " + ", ".join(refused))
+    before = [r.snapshot.get("title") for r in daily.stored(session, user, day)]
     session.execute(delete(DailyRecipe).where(DailyRecipe.user_id == user.id, DailyRecipe.day == day))
-    session.add_all([DailyRecipe(
-        user_id=user.id, day=day, position=i, recipe_id=rid,
-        origin="marmiton" if acceptable[rid].source == RecipeSource.MARMITON and acceptable[rid].created_at >= start_of_day
-        else "base",
-    ) for i, rid in enumerate(chosen)])
+    session.add_all([DailyRecipe(user_id=user.id, day=day, position=i, recipe_ref=daily.key(d),
+                                 snapshot=daily.snapshot(d), origin="agent") for i, d in enumerate(drafts)])
     session.commit()
-    return {"ok": True, "avant": before, "apres": [acceptable[r].title for r in chosen]}
+    return {"ok": True, "avant": before, "apres": [d.recipe.title for d in drafts]}
 
 
-COMMANDS = {"contexte": contexte, "chercher": chercher, "marmiton": marmiton, "detail": detail, "definir": definir}
+COMMANDS = {"contexte": contexte, "chercher": chercher, "detail": detail, "definir": definir}
 
 
 def main(argv: list[str]) -> int:
@@ -268,7 +213,7 @@ def main(argv: list[str]) -> int:
         except Erreur as error:
             print(json.dumps({"erreur": str(error)}, ensure_ascii=False))
             return 1
-        except TypeError:
+        except (TypeError, ValueError):
             print(json.dumps({"erreur": "Paramètres invalides. " + __doc__}, ensure_ascii=False))
             return 1
     print(json.dumps(result, ensure_ascii=False, indent=1, default=str))
