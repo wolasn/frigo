@@ -81,6 +81,17 @@ export default function ShoppingPage() {
     }
   }
 
+  async function unpurchase(line: ShoppingLine) {
+    setError(null);
+    try {
+      await api.unpurchase([line.id]);
+      setMessage(`« ${line.label} » est de nouveau à acheter.`);
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Action impossible.");
+    }
+  }
+
   async function removeLine(line: ShoppingLine) {
     try {
       await api.deleteShoppingLine(line.id);
@@ -162,7 +173,7 @@ export default function ShoppingPage() {
               <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-stone-500">Acheté · {list.purchased.length}</h2>
               <ul className="divide-y divide-stone-200 overflow-hidden rounded-xl border border-stone-200 bg-white dark:divide-stone-800 dark:border-stone-800 dark:bg-stone-900">
                 {list.purchased.map((line) => (
-                  <LineRow key={line.id} line={line} done onRemove={() => removeLine(line)} />
+                  <LineRow key={line.id} line={line} done onToggle={() => unpurchase(line)} onRemove={() => removeLine(line)} />
                 ))}
               </ul>
             </section>
@@ -196,7 +207,8 @@ function LineRow({ line, done, onToggle, onRemove }: { line: ShoppingLine; done:
         onChange={onToggle}
         disabled={!onToggle}
         className="mt-1 size-5 shrink-0 accent-brand-600 disabled:opacity-60"
-        aria-label={`Acheté : ${line.label}`}
+        aria-label={line.purchased ? `Remettre à acheter : ${line.label}` : `Acheté : ${line.label}`}
+        title={line.purchased ? "Décocher : remettre dans la liste" : undefined}
       />
       <div className="min-w-0 flex-1">
         <p className={"font-medium " + (done ? "line-through opacity-60" : "")}>

@@ -111,3 +111,15 @@ def test_article_manuel_achete_supprimable(client, env):
     assert "Piles" in bought(client) and "Piles" not in personal_lines(client)
     assert client.delete(f"/api/shopping/{line['id']}").status_code == 204
     assert "Piles" not in bought(client)
+
+
+def test_achat_annule_revient_dans_la_liste(client, env):
+    env["plan"]("puree", 1)
+    carrot = personal_lines(client)["Carotte"]
+    client.post("/api/shopping/purchase", json={"ids": [carrot["id"]]})
+    assert client.post("/api/shopping/unpurchase", json={"ids": [carrot["id"]]}).json() == {"removed_from_list": 1}
+    assert "Carotte" not in bought(client) and personal_lines(client)["Carotte"]["quantity"] == carrot["quantity"]
+    line = client.post("/api/shopping/manual", json={"label": "Piles"}).json()
+    client.post("/api/shopping/purchase", json={"ids": [line["id"]]})
+    client.post("/api/shopping/unpurchase", json={"ids": [line["id"]]})
+    assert "Piles" in personal_lines(client)

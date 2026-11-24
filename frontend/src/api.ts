@@ -331,6 +331,7 @@ export const api = {
     request<ShoppingLine>("POST", "/api/shopping/manual", { label, shared_agenda_id }),
   deleteShoppingLine: (id: string) => request<void>("DELETE", `/api/shopping/${id}`),
   purchase: (ids: string[]) => request<{ removed_from_list: number }>("POST", "/api/shopping/purchase", { ids }),
+  unpurchase: (ids: string[]) => request<{ removed_from_list: number }>("POST", "/api/shopping/unpurchase", { ids }),
 
   agendas: () => request<Agenda[]>("GET", "/api/agendas"),
   createAgenda: (name: string) => request<AgendaDetail>("POST", "/api/agendas", { name }),

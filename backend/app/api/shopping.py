@@ -172,3 +172,16 @@ def purchase(body: PurchaseIn, session: DbSession, user: CurrentUser) -> Purchas
         .values(purchased_at=now, purchased_by=user.id)).rowcount
     session.commit()
     return PurchaseOut(removed_from_list=done)
+
+
+@router.post("/unpurchase")
+def unpurchase(body: PurchaseIn, session: DbSession, user: CurrentUser) -> PurchaseOut:
+    """Achat coché par erreur : les lignes reviennent dans la liste (recalculée à la prochaine ouverture)."""
+    items = [_get_line(session, user, line_id, purchased_ok=True) for line_id in body.ids]
+    for agenda_id in sorted({i.shared_agenda_id for i in items}, key=lambda a: (a is not None, str(a))):
+        lock_list(session, user, agenda_id)
+    done = session.execute(update(ShoppingListItem).where(
+        ShoppingListItem.id.in_([i.id for i in items]), ShoppingListItem.purchased_at.is_not(None))
+        .values(purchased_at=None, purchased_by=None)).rowcount
+    session.commit()
+    return PurchaseOut(removed_from_list=done)
