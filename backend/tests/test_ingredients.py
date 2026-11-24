@@ -59,3 +59,9 @@ def _food(unit, piece_weight=None):
 )
 def test_conversion_unite_de_reference(raw, unit, piece_weight, expected):
     assert to_reference_quantity(parse_ingredient(raw), _food(unit, piece_weight)) == expected
+
+
+def test_unite_collee_au_nom_cuisine_az():
+    assert parse_ingredient("2 filet(s) Poisson").name == "poisson"
+    assert parse_ingredient("1 branche(s) Romarin").name == "romarin"
+    assert parse_ingredient("2 Pomme(s) de terre").name == "pomme de terre"

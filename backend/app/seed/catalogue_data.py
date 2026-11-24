@@ -419,6 +419,16 @@ FOODS = [
     ("Feuilles de brick", "Pain et boulangerie", "piece", 15, V, VG, {"fridge": 30}),
     ("Seitan", "Plats préparés", "g", None, V, VG, {"fridge": 7}),
     ("Crème de soja", "Produits laitiers", "ml", None, V, VG, {"pantry": 180, "fridge:ouvert": 4}),
+    ("Graines de sésame", "Fruits secs et oléagineux", "g", None, V, VG, {}),
+    ("Pois gourmands", "Légumes", "g", None, V, VG, {"fridge": 4}),
+    ("Son d'avoine", "Féculents et céréales", "g", None, V, VG, {}),
+    ("Carvi", "Épices et aromates", "g", None, V, VG, {}),
+    ("Salsifis", "Légumes", "g", None, V, VG, {"fridge": 7}),
+    ("Vinaigrette", "Condiments et sauces", "ml", None, V, VG, {"fridge:ouvert": 30}),
+    ("Croûtons", "Pain et boulangerie", "g", None, V, False, {}),
+    ("Palette de porc", "Viandes", "g", None, False, False, {"fridge": 3}),
+    ("Fond de veau", "Condiments et sauces", "g", None, False, False, {}),
+    ("Sauce Worcestershire", "Condiments et sauces", "ml", None, False, False, {}),
 ]
 
 # Autres noms utilisés dans les recettes, pour reconnaître les ingrédients Marmiton.
@@ -430,7 +440,7 @@ ALIASES = {
     "Steak de bœuf": ["boeuf", "bœuf"],
     "Emmental râpé": ["emmental", "fromage râpé"],
     "Crème liquide": ["crème fraîche liquide", "crème entière", "crème liquide entière"],
-    "Crème fraîche": ["crème fraîche épaisse", "crème épaisse"],
+    "Crème fraîche": ["crème", "crème fraîche épaisse", "crème épaisse"],
     "Lait demi-écrémé": ["lait"],
     "Pâtes": ["spaghetti", "spaghettis", "tagliatelles", "penne", "coquillettes", "macaronis", "fusilli", "lasagnes"],
     "Riz": ["riz basmati", "riz long", "riz rond", "riz arborio"],
@@ -447,7 +457,7 @@ ALIASES = {
     "Lardons": ["lardons fumés", "allumettes de lardons"],
     "Saumon": ["pavé de saumon", "pavés de saumon", "filet de saumon"],
     "Cabillaud": ["dos de cabillaud", "filet de cabillaud", "poisson blanc", "filets de poisson blanc"],
-    "Blanc de poulet": ["poulet", "escalope de poulet", "filet de poulet"],
+    "Blanc de poulet": ["escalope de volaille", "escalopes de volaille", "escalope de poulet", "poulet", "escalope de poulet", "filet de poulet"],
     "Salade (laitue)": ["salade", "laitue"],
     "Champignons de Paris": ["champignons"],
     "Fromage de chèvre": ["chèvre", "bûche de chèvre", "fromage de chèvre frais", "crottin", "crottin de chavignol"],
@@ -564,7 +574,16 @@ ALIASES = {
     "Purée en flocons": ["purée mousseline", "flocons de purée"],
     "Pain pita": ["naan", "naans", "pain naan"],
     "Clémentine": ["mandarine", "mandarines"],
+    "Ciboulette": ["ciboule", "cébette", "cébettes"],
     "Graines de soja": ["edamame", "edamames", "fèves de soja"],
+    "Ras el hanout": ["raz el hanout", "raz-el-hanout", "ras-el-hanout"],
+    "Germes de soja": ["pousses de soja", "pousse de soja", "soja frais"],
+    "Graines de sésame": ["sésame", "sésame grillé", "graines de sésame blond"],
+    "Pois gourmands": ["pois gourmand", "pois mange-tout", "mange-tout"],
+    "Palette de porc": ["palette fumée", "palette"],
+    "Fond de veau": ["fond brun"],
+    "Croûtons": ["croûton"],
+    "Sauce Worcestershire": ["worcestershire"],
     "Feuilles de brick": ["brick", "feuille de brick"],
     "Crème de soja": ["crème soja"],
     "Potimarron": ["petit potimarron"],
@@ -676,10 +695,12 @@ CIQUAL_CODES = {
     "Chipolata": 30115, "Foie de volaille": 40108, "Anchois": 26000, "Rouget": 26085,
     "Protéines de soja texturées": 20591, "Tapioca": 4000, "Purée en flocons": 4019,
     "Feuilles de brick": 23430, "Seitan": 25598, "Crème de soja": 11214,
+    "Graines de sésame": 15010, "Pois gourmands": 20173, "Son d'avoine": 9640, "Carvi": 11064, "Salsifis": 20197,
+    "Vinaigrette": 11110, "Croûtons": 7432, "Palette de porc": 28009, "Fond de veau": 11169,
 }
 
 # Sans valeurs nutritionnelles : épices et sauces sans équivalent fiable dans Ciqual (quantités négligeables dans
 # une recette), et deux aliments dont la fiche Ciqual 2025 n'a pas les calories (Câpres 11040, Ricotta 19585).
 # Tous les autres aliments du catalogue ont leur code.
 NO_CIQUAL = {"Citronnelle", "Ras el hanout", "Badiane", "Baies de genièvre", "Baies roses", "Asafoetida", "Tabasco",
-             "Sauce sriracha", "Mirin", "Câpres", "Ricotta"}
+             "Sauce sriracha", "Mirin", "Câpres", "Ricotta", "Sauce Worcestershire"}

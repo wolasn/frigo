@@ -80,8 +80,13 @@ class ParsedIngredient:
 _NUMBER = re.compile(r"^(\d+(?:[.,]\d+)?)(?:\s*/\s*(\d+))?(?:\s*(?:a|-)\s*\d+(?:[.,]\d+)?)?\s*")
 
 
+_UNIT_THEN_NAME = re.compile(r"^([\d\s.,/½¼¾⅓⅔]*)[a-zà-ÿ]+\((?:s|x|es)\)\s+(?=[A-ZÀ-ÝŒ])")
+
+
 def parse_ingredient(raw: str) -> ParsedIngredient:
-    text = re.sub(r"\((?:s|x|es)\)", "", raw.strip(), flags=re.I)  # « Pomme(s) de terre », « Poireau(x) »
+    # « 2 filet(s) Poisson » (Cuisine AZ) : « filet(s) » est une unité, le nom commence à la majuscule.
+    text = _UNIT_THEN_NAME.sub(r"\1", raw.strip())
+    text = re.sub(r"\((?:s|x|es)\)", "", text, flags=re.I)  # « Pomme(s) de terre », « Poireau(x) »
     for symbol, fraction in FRACTIONS.items():
         text = text.replace(symbol, f" {fraction} ")
     text = normalize(text)
