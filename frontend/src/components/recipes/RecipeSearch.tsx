@@ -15,10 +15,12 @@ export type SearchState = { ingredients: string[]; servings: number };
 /** Recherche de recettes : ingrédients à cocher (ou en photo), filtres, sites web et recettes créées, IA. */
 export default function RecipeSearch({
   onOpen,
+  onSearch,
   between,
   compact = false,
 }: {
   onOpen: (card: RecipeCard, state: SearchState) => void;
+  onSearch?: () => void; // une recherche (ou l'IA) démarre
   between?: ReactNode; // affiché entre le formulaire et les résultats (ex. recettes du jour)
   compact?: boolean; // dans une fenêtre : filtres repliés
 }) {
@@ -85,6 +87,7 @@ export default function RecipeSearch({
     }
     setError(null);
     setSiteErrors([]);
+    onSearch?.();
     const isUrl = /^https?:\/\//i.test(words);
     setBusy(isUrl ? "Lecture de la recette…" : "Recherche sur Marmiton, Cuisine AZ, Ptitchef et dans les recettes créées… (jusqu'à 30 secondes)");
     try {
@@ -107,6 +110,7 @@ export default function RecipeSearch({
   async function invent(event: FormEvent) {
     event.preventDefault();
     setError(null);
+    onSearch?.();
     setBusy("L'IA invente des recettes… (jusqu'à une minute)");
     try {
       const cards = await api.generateRecipes({ count: aiCount, servings, diet, ingredients: checked, only, wish: aiWish.trim() || undefined });

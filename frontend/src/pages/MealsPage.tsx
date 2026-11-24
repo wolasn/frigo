@@ -19,6 +19,7 @@ export default function MealsPage() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [daily, setDaily] = useState<DailyRecipes | null>(null);
   const [dailyFailed, setDailyFailed] = useState(false);
+  const [dailyHidden, setDailyHidden] = useState(false);
   const [servings, setServings] = useState(2);
 
   useEffect(() => {
@@ -60,7 +61,9 @@ export default function MealsPage() {
       <div className={tab === "search" ? "" : "hidden"}>
         <RecipeSearch
           onOpen={(card, state) => setOpen({ ref: card.id, servings: state.servings, ingredients: state.ingredients })}
-          between={<DailySection daily={daily} failed={dailyFailed} onOpen={openRef} />}
+          onSearch={() => setDailyHidden(true)}
+          between={<DailySection daily={daily} failed={dailyFailed} onOpen={openRef} hidden={dailyHidden}
+            onToggle={() => setDailyHidden((h) => !h)} />}
         />
       </div>
 
@@ -174,15 +177,27 @@ function CardGrid({ cards, onOpen }: { cards: RecipeCard[]; onOpen: (id: string)
   );
 }
 
-function DailySection({ daily, failed, onOpen }: { daily: DailyRecipes | null; failed: boolean; onOpen: (id: string) => void }) {
+/** Recettes du jour : repliables ; repliées d'elles-mêmes quand on lance une recherche. */
+function DailySection({ daily, failed, onOpen, hidden, onToggle }: {
+  daily: DailyRecipes | null;
+  failed: boolean;
+  onOpen: (id: string) => void;
+  hidden: boolean;
+  onToggle: () => void;
+}) {
   if (failed || (daily && daily.recipes.length === 0)) return null;
   return (
-    <section className="mb-8">
-      <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-stone-500">
-        Recettes du jour
-        {daily && <span className="ml-2 font-normal normal-case tracking-normal">· {new Date(daily.day + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}</span>}
-      </h2>
-      {daily === null ? (
+    <section className={hidden ? "mb-4" : "mb-8"}>
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-stone-500">
+          Recettes du jour
+          {daily && <span className="ml-2 font-normal normal-case tracking-normal">· {new Date(daily.day + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}</span>}
+        </h2>
+        <button className="text-sm text-stone-500 hover:underline" onClick={onToggle} aria-expanded={!hidden}>
+          {hidden ? "Afficher ▾" : "Masquer ▴"}
+        </button>
+      </div>
+      {hidden ? null : daily === null ? (
         <Loading label="Choix des recettes du jour…" />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
