@@ -124,8 +124,11 @@ def queries_for(wanted: list[str], text: str | None) -> list[str]:
 
 
 def _fetch_site(client: WebClient, site_name: str, queries: list[str], known: dict[str, list[str] | None],
-                skip: set[str], pages: int) -> tuple[dict[str, list[str]], list[WebRecipe], list[str], list[str]]:
-    """Travail réseau d'un site (dans son propre fil) : recherches absentes du cache, puis pages des recettes."""
+                pages: int) -> tuple[dict[str, list[str]], list[Draft], list[WebRecipe], list[str], list[str]]:
+    """Travail d'un site (dans son propre fil) : recherches absentes du cache, puis ses `pages` premiers résultats
+    (à tour de rôle entre les recherches), pris en mémoire s'ils y sont, lus sur le site sinon. Une page déjà
+    illisible est sautée. Ainsi une recherche garde ses meilleurs résultats, même si d'autres recherches ont déjà
+    lu des recettes plus loin dans sa liste, et une recherche répétée ne relit rien."""
     site = SITES[site_name]
     found_urls: dict[str, list[str]] = {}
     errors: list[str] = []
@@ -140,23 +143,26 @@ def _fetch_site(client: WebClient, site_name: str, queries: list[str], known: di
                 errors.append(str(error))
                 continue
         lists.append(cached)
-    # À tour de rôle entre les recherches : la première ne prend pas toutes les pages.
     urls: list[str] = []
     for rank in range(max((len(x) for x in lists), default=0)):
         urls += [x[rank] for x in lists if rank < len(x) and x[rank] not in urls]
+    kept: list[Draft] = []
     recipes: list[WebRecipe] = []
     failed: list[str] = []
     for url in urls:
-        if len(recipes) + len(failed) >= pages:
+        if len(kept) + len(recipes) + len(failed) >= pages:
             break
-        if url in skip:
+        if memory.failed(url):
+            continue
+        if (draft := memory.get(url)) is not None:
+            kept.append(draft)
             continue
         try:
             recipes.append(client.recipe(url))
         except SourceError as error:
             errors.append(str(error))
             failed.append(url)
-    return found_urls, recipes, errors, failed
+    return found_urls, kept, recipes, errors, failed
 
 
 def web_drafts(session: Session, queries: list[str], pages: int = PAGES_PER_SITE,
@@ -166,38 +172,20 @@ def web_drafts(session: Session, queries: list[str], pages: int = PAGES_PER_SITE
         return [], []
     client = client or WebClient()
     known = _cached_many(session, list(SITES), queries)
-    # Recettes déjà en mémoire : pas relues ; elles comptent dans les résultats.
-    in_memory: dict[str, Draft] = {}
-    skip_failed: set[str] = set()
-    budget: dict[str, int] = {}
-    for name in SITES:
-        found = 0
-        for urls in known[name].values():
-            for url in urls or []:
-                if url in in_memory or url in skip_failed:
-                    continue
-                if (draft := memory.get(url)) is not None:
-                    in_memory[url] = draft
-                    found += 1
-                elif memory.failed(url):
-                    skip_failed.add(url)
-                    found += 1  # une page illisible compte : elle a déjà été essayée
-        budget[name] = max(0, pages - found)  # une recherche déjà faite ne relit pas de pages
-    skip = set(in_memory) | skip_failed
     with ThreadPoolExecutor(max_workers=len(SITES)) as pool:
-        futures = {name: pool.submit(_fetch_site, client, name, queries, known[name], skip, budget[name])
-                   for name in SITES}
+        futures = {name: pool.submit(_fetch_site, client, name, queries, known[name], pages) for name in SITES}
         results = {name: future.result() for name, future in futures.items()}
 
-    drafts = list(in_memory.values())
+    drafts: list[Draft] = []
     new: list[Draft] = []
     errors: list[str] = []
     matcher = utensils = None  # catalogue chargé seulement s'il y a des pages nouvelles
     stored = False
-    for name, (found_urls, recipes, site_errors, failed) in results.items():
+    for name, (found_urls, kept, recipes, site_errors, failed) in results.items():
         for query, urls in found_urls.items():
             _store_urls(session, name, query, urls)
             stored = True
+        drafts += kept
         for data in recipes:
             if matcher is None:
                 matcher, utensils = FoodMatcher(session), standard_utensils(session)

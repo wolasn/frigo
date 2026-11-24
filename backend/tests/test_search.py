@@ -180,3 +180,13 @@ def test_liste_rangee_et_complete(alice, db_session):
     groups = {g["category"]: [t["name"] for t in g["items"]] for g in alice.get("/api/ingredients/categories").json()}
     assert "Asafoetida" in groups["Épices et aromates"]  # du catalogue, même jamais vu dans une recette
     assert "Eau" not in [n for items in groups.values() for n in items]
+
+
+def test_une_recherche_garde_ses_meilleurs_resultats(alice, web):
+    # Les premiers résultats de « testcarotte » sont nouveaux ; plus loin, des recettes déjà lues par une autre recherche.
+    top = [web.add("marmiton", f"Testcarotte seule {i}", ["3 carottes"]) for i in range(3)]
+    for i in range(9):
+        web.add("marmiton", f"Testpoireau et testcarotte {i}", ["2 poireaux", "1 carotte"])
+    search(alice, text="testpoireau")
+    found = titles(search(alice, text="testcarotte"))
+    assert all(r.title in found for r in top)
