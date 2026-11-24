@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import delete, exists, or_, select, text
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -221,15 +222,22 @@ def persist(session: Session, draft: Draft) -> Recipe:
         if existing is not None:
             return existing
     # Des copies : la recette en mémoire sert à d'autres requêtes et ne doit pas s'attacher à cette session.
-    recipe = session.merge(draft.recipe)
+    # Elle n'existe pas encore en base : insertions directes, par lots (pas de vérification ligne par ligne).
+    recipe = _copy(draft.recipe)
+    session.add(recipe)
     session.flush()
-    for row, _ in draft.ingredients:
-        session.merge(row)
+    session.add_all([_copy(row) for row, _ in draft.ingredients])
     session.add_all([RecipeStep(recipe_id=recipe.id, position=i, instruction=text) for i, text in enumerate(draft.steps)])
-    for link, _ in draft.utensils:
-        session.merge(link)
+    session.add_all([_copy(link) for link, _ in draft.utensils])
     session.flush()
     return recipe
+
+
+def _copy(obj):
+    """Une copie détachée d'une ligne en mémoire (mêmes colonnes, identifiant compris ; les valeurs vides sont
+    laissées aux valeurs par défaut de la base)."""
+    values = {attr.key: getattr(obj, attr.key) for attr in sa_inspect(type(obj)).column_attrs}
+    return type(obj)(**{key: value for key, value in values.items() if value is not None})
 
 
 def is_kept(session: Session, recipe_id: uuid.UUID) -> bool:
