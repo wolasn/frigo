@@ -109,7 +109,7 @@ def _fetch_site(client: WebClient, site_name: str, queries: list[str], known: di
     site = SITES[site_name]
     found_urls: dict[str, list[str]] = {}
     errors: list[str] = []
-    urls: list[str] = []
+    lists: list[list[str]] = []
     for query in queries:
         cached = known.get(query)
         if cached is None:
@@ -119,7 +119,11 @@ def _fetch_site(client: WebClient, site_name: str, queries: list[str], known: di
             except SourceError as error:
                 errors.append(str(error))
                 continue
-        urls += [u for u in cached if u not in urls]
+        lists.append(cached)
+    # À tour de rôle entre les recherches : la première ne prend pas toutes les pages.
+    urls: list[str] = []
+    for rank in range(max((len(x) for x in lists), default=0)):
+        urls += [x[rank] for x in lists if rank < len(x) and x[rank] not in urls]
     recipes: list[WebRecipe] = []
     for url in urls:
         if len(recipes) >= pages:

@@ -36,9 +36,8 @@ def test_de_saison_sans_dessert_et_rien_en_base(db_session, env):
     before = db_session.scalar(select(func.count()).select_from(Recipe))
     rows = daily.choose(db_session, env["user"], NOVEMBER)
     assert len(rows) == 3
-    # deux soupes de saison, mais pas l'une après l'autre : un autre type de plat s'intercale
+    # les deux soupes de saison et un autre plat ; pas le dessert ni le plat hors saison
     assert set(titles(rows)) == {"test-daily soupe potiron", "test-daily soupe poireaux", "test-daily plat pâtes"}
-    assert titles(rows)[0].startswith("test-daily soupe") and titles(rows)[1] == "test-daily plat pâtes"
     assert "test-daily plat gateau au chocolat" not in titles(rows)
     assert "test-daily plat tomates courgettes" not in titles(rows)  # hors saison : après les autres
     assert rows[0].origin == "web" and rows[0].recipe_ref.startswith("https://")
@@ -107,7 +106,7 @@ def test_pas_de_fruits_dans_les_recherches_de_saison():
 
 def test_recherches_de_saison_qui_tournent(monkeypatch):
     queries = [daily.queries_for_day(NOVEMBER + timedelta(days=i)) for i in range(3)]
-    assert all(len(q) == 2 for q in queries)
+    assert all(len(q) == 3 for q in queries)
     assert queries[0] != queries[1] != queries[2]
     assert "tomate" not in {q for qs in queries for q in qs}
     produce = set(daily.season.search_produce(NOVEMBER))

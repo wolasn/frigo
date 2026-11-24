@@ -36,7 +36,7 @@ logger = logging.getLogger("frigo.daily")
 PICKS = 3
 NO_REPEAT_DAYS = 14  # une recette proposée ou au menu ne revient pas avant deux semaines
 PLANNED_AHEAD_DAYS = 7  # déjà au menu dans la semaine qui vient
-DAILY_QUERIES = 2
+DAILY_QUERIES = 3  # un produit, un plat, un autre produit
 ACTIVE_DAYS = 30  # comptes sans connexion depuis plus longtemps : rien n'est préparé d'avance
 NOT_A_MEAL_CATEGORY = re.compile(r"ap[ée]ritif|sauce|boisson|cocktail|confiserie|condiment|p[aâ]te\b", re.IGNORECASE)
 
@@ -195,7 +195,7 @@ def diverse(picks: list[Pick], count: int, used_products: set[str] | None = None
 
     def value(p: Pick) -> float:
         kind = style(p.draft.recipe.title)
-        return (p.score - 2.5 * len(used & set(p.seasonal)) - 1.5 * sites.count(p.draft.recipe.site)
+        return (p.score - 4 * len(used & set(p.seasonal)) - 1.5 * sites.count(p.draft.recipe.site)
                 - (4 * styles.count(kind) if kind else 0))
 
     while left and len(chosen) < count:
