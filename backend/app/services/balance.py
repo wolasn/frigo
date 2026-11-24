@@ -7,7 +7,7 @@ Règles fixes, sans IA, inspirées des repères du PNNS (Santé publique France,
 - viande hors volaille : 500 g par semaine au plus ; charcuterie : 150 g au plus.
 
 Chaque repas est analysé par portion (une personne) à partir des ingrédients reconnus dans
-le catalogue. Un reste compte comme la recette dont il vient.
+le catalogue.
 """
 
 import re
@@ -18,9 +18,9 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Food, FoodCategory, InventoryItem, PlannedMeal, Recipe, RecipeIngredient
+from app.models import Food, FoodCategory, PlannedMeal, Recipe, RecipeIngredient
 from app.seed.ciqual import ciqual_table
-from app.services.recipes import _ingredient_weight_g
+from app.services.recipes import Draft, ingredient_weight_g
 
 PORTION_FV_G = 80
 FV_PER_DAY = 5
@@ -97,13 +97,21 @@ def recipe_facts_many(session: Session, recipes: list[Recipe]) -> dict[uuid.UUID
     return {rid: _facts(by_id[rid], rows) for rid, rows in rows_by_recipe.items()}
 
 
+def facts_for_drafts(session: Session, drafts: list[Draft]) -> dict[str, MealFacts]:
+    """Apports de recettes en mémoire (ou en base), par référence."""
+    category_ids = {f.category_id for d in drafts for _, f in d.ingredients if f is not None}
+    names = dict(session.execute(select(FoodCategory.id, FoodCategory.name).where(FoodCategory.id.in_(category_ids))).all())         if category_ids else {}
+    return {d.ref: _facts(d.recipe, [(row, f, names.get(f.category_id)) for row, f in d.ingredients
+                                     if f is not None and not row.is_optional]) for d in drafts}
+
+
 def _facts(recipe: Recipe, rows: list) -> MealFacts:
     facts = MealFacts(score=float(recipe.health_score) if recipe.health_score is not None else None,
                       vegetarian=bool(recipe.is_vegetarian))
     servings = max(1, recipe.servings or 1)
     for ingredient, food, category_name in rows:
         group = food_group(food, category_name)
-        weight = _ingredient_weight_g(food, ingredient.quantity_ref)
+        weight = ingredient_weight_g(food, ingredient.quantity_ref)
         if not weight:
             # « 4 tranches de saumon » : poids inconnu, mais le plat en contient bien.
             if group in DEFAULT_SERVING_G and ingredient.quantity is not None:
@@ -127,22 +135,10 @@ class Tile:
     meal_ids: list[uuid.UUID]  # repas concernés, mis en évidence au clic
 
 
-def _meal_recipe(session: Session, meal: PlannedMeal) -> Recipe | None:
-    if meal.recipe_id:
-        return session.get(Recipe, meal.recipe_id)
-    if meal.leftover_item_id:
-        item = session.get(InventoryItem, meal.leftover_item_id)
-        if item and item.source_recipe_id:
-            return session.get(Recipe, item.source_recipe_id)
-    return None
-
-
 def weekly_balance(session: Session, meals: list[PlannedMeal]) -> dict:
-    # Recettes et restes lus en deux requêtes, pas une par repas (140 repas par semaine possibles).
-    # (gardés dans une variable : la session ne retient ses objets que tant qu'ils sont référencés)
-    preloaded = session.scalars(select(Recipe).where(Recipe.id.in_({m.recipe_id for m in meals if m.recipe_id}))).all()
-    preloaded += session.scalars(select(InventoryItem).where(InventoryItem.id.in_({m.leftover_item_id for m in meals if m.leftover_item_id}))).all()
-    recipes = {meal.id: _meal_recipe(session, meal) for meal in meals}
+    # Recettes lues en une requête, pas une par repas (140 repas par semaine possibles).
+    by_id = {r.id: r for r in session.scalars(select(Recipe).where(Recipe.id.in_({m.recipe_id for m in meals})))}
+    recipes = {meal.id: by_id.get(meal.recipe_id) for meal in meals}
     cache = recipe_facts_many(session, list({r.id: r for r in recipes.values() if r}.values()))
     entries: list[tuple[PlannedMeal, Recipe | None, MealFacts | None]] = [
         (meal, recipes[meal.id], cache[recipes[meal.id].id] if recipes[meal.id] else None) for meal in meals
@@ -215,14 +211,14 @@ def weekly_balance(session: Session, meals: list[PlannedMeal]) -> dict:
         "info", "Un repas végétarien de temps en temps aide à tenir le repère viande.", vegetarian,
     ))
 
-    counts = Counter(r.id for m, r, _ in with_recipe if not m.leftover_item_id)  # un reste n'est pas une répétition
+    counts = Counter(r.id for m, r, _ in with_recipe)
     repeated = {rid for rid, n in counts.items() if n > SAME_RECIPE_MAX}
     titles = sorted({r.title for _, r, _ in with_recipe if r is not None and r.id in repeated})
     tiles.append(Tile(
         "variety", "Variété", f"{len(counts)} plat(s) différent(s)", f"un même plat {SAME_RECIPE_MAX} fois au plus",
         "warn" if repeated else "good",
         ("Souvent au menu : " + ", ".join(titles) + ".") if repeated else "Menus variés.",
-        [m.id for m, r, _ in with_recipe if r is not None and r.id in repeated and not m.leftover_item_id],
+        [m.id for m, r, _ in with_recipe if r is not None and r.id in repeated],
     ))
 
     return {
@@ -304,11 +300,9 @@ class WeekState:
 
 
 def draft_value(evaluation, facts: MealFacts, state: WeekState) -> tuple[float, list[str]]:
-    """Intérêt d'une recette pour le prochain créneau : stock d'abord, puis équilibre de la semaine."""
+    """Intérêt d'une recette pour le prochain créneau : équilibre de la semaine, notes et score santé."""
     reasons: list[str] = []
-    value = -2.0 * evaluation.missing_count + 1.5 * len(evaluation.expiring_used)
-    if evaluation.expiring_used:
-        reasons.append("Utilise " + ", ".join(evaluation.expiring_used[:2]) + " (bientôt périmé)")
+    value = 0.0
     rating = evaluation.meta.rating if evaluation.meta and evaluation.meta.rating else None
     if rating:
         value += (rating - 3) * 0.7
@@ -328,7 +322,6 @@ def draft_value(evaluation, facts: MealFacts, state: WeekState) -> tuple[float, 
     value += min(facts.g("fruit_veg"), 300) / PORTION_FV_G * 0.6
     if facts.score is not None:
         reasons.append(f"Score {_fmt(facts.score)}/10")
-    reasons.append("Tout est en stock" if evaluation.missing_count == 0 else f"{evaluation.missing_count} achat(s)")
     return value, reasons
 
 
@@ -342,8 +335,10 @@ SWEET_TITLE = re.compile(
 DESSERT_SUGARS_G = 15  # sucres pour 100 g au-delà desquels un plat est un dessert ou une gourmandise
 
 
-def is_dessert(recipe: Recipe) -> bool:
-    """Les recettes n'ont pas de type de plat : on reconnaît les desserts au titre ou au sucre."""
+def is_dessert(recipe: Recipe, category: str | None = None) -> bool:
+    """Un dessert : selon la catégorie donnée par le site, sinon d'après le titre ou le sucre."""
+    if category and re.search(r"dessert|g[aâ]teau|confiserie|boisson|cocktail|go[uû]ter", category, re.IGNORECASE):
+        return True
     if SWEET_TITLE.search(recipe.title or ""):
         return True
     per_100g = (recipe.nutrition_per_serving or {}).get("per_100g") or {}

@@ -1,94 +1,84 @@
-"""Recettes du jour, sur la vraie base (transaction annulée), sans Marmiton ni IA réels."""
+"""Recettes du jour (sites simulés) : saison, pas de répétition, pas de dessert, rien en base, IA en dernier recours."""
 
 from datetime import date, timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from app.models import Recipe, User
-from app.models.enums import Difficulty, RecipeSource
+from app.clock import today
+from app.models import DailyRecipe, Recipe, User
 from app.services import daily
-from app.services.ingredients import FoodMatcher
-from app.services.marmiton import MarmitonRecipe
-from app.services.recipes import build_marmiton_recipe
 
 PASSWORD = "un-mot-de-passe-solide"
-NOVEMBER = date(2026, 11, 12)  # potiron et poireau de saison, tomate et courgette hors saison
+NOVEMBER = date(2026, 11, 24)  # potiron et poireau de saison, tomate et courgette hors saison
 
 
 @pytest.fixture
-def env(client, db_session, monkeypatch):
-    matcher = FoodMatcher(db_session)
-
-    def recipe(slug, ingredients):
-        return build_marmiton_recipe(db_session, MarmitonRecipe(
-            url=f"https://www.marmiton.org/recettes/recette_{slug}_1.aspx", title=slug, servings=4, prep_minutes=5,
-            cook_minutes=5, image_url=None, ingredients=ingredients, steps=["Servez."], difficulty=Difficulty.EASY,
-            nutrition=None), matcher)
-
+def env(client, db_session, web, monkeypatch):
+    monkeypatch.setattr(daily, "queries_for_day", lambda day, count=2: ["soupe", "plat"])
     recipes = {
-        "potiron": recipe("test-daily-potiron", ["800 g de potiron", "1 oignon"]),
-        "poireau": recipe("test-daily-poireau", ["4 poireaux", "200 g de pomme de terre"]),
-        "tomate": recipe("test-daily-tomate", ["6 tomates", "2 courgettes"]),
-        "pates": recipe("test-daily-pates", ["300 g de pâtes", "1 oignon"]),
+        "potiron": web.add("marmiton", "test-daily soupe potiron", ["800 g de potiron", "1 oignon"]),
+        "poireau": web.add("cuisineaz", "test-daily soupe poireaux", ["4 poireaux", "200 g de pommes de terre"]),
+        "tomate": web.add("ptitchef", "test-daily plat tomates courgettes", ["6 tomates", "2 courgettes"]),
+        "pates": web.add("marmiton", "test-daily plat pâtes", ["300 g de pâtes", "1 oignon"]),
+        "gateau": web.add("ptitchef", "test-daily plat gateau au chocolat", ["200 g de chocolat"], category="Dessert"),
     }
-    db_session.flush()
-    ours = {r.id for r in recipes.values()}
-    real_propose = daily.propose
-    # Seules les recettes du test sont candidates : la base réelle en contient beaucoup d'autres.
-    monkeypatch.setattr(daily, "propose", lambda *a, **k: [e for e in real_propose(*a, **k) if e.recipe.id in ours])
-
     client.post("/api/auth/register", json={"username": "alice", "display_name": "Alice", "password": PASSWORD})
     user = db_session.scalar(select(User).where(User.username == "alice"))
     return {"recipes": recipes, "user": user}
 
 
-def titles(picks):
-    return [p.evaluation.recipe.title for p in picks]
+def titles(rows):
+    return [r.snapshot["title"] for r in rows]
 
 
-def test_de_saison_d_abord_hors_saison_en_dernier(db_session, env):
-    picks = daily.rank(db_session, env["user"], NOVEMBER)
-    assert len(picks) == 3
-    assert set(titles(picks)[:2]) == {"test-daily-potiron", "test-daily-poireau"}
-    assert "test-daily-tomate" not in titles(picks)
-    assert picks[0].seasonal  # produits de saison repérés
+def test_de_saison_sans_dessert_et_rien_en_base(db_session, env):
+    before = db_session.scalar(select(func.count()).select_from(Recipe))
+    rows = daily.choose(db_session, env["user"], NOVEMBER)
+    assert len(rows) == 3
+    assert set(titles(rows[:2])) == {"test-daily soupe potiron", "test-daily soupe poireaux"}
+    assert "test-daily plat gateau au chocolat" not in titles(rows)
+    assert "test-daily plat tomates courgettes" not in titles(rows)  # hors saison : après les autres
+    assert rows[0].origin == "web" and rows[0].recipe_ref.startswith("https://")
+    assert db_session.scalar(select(func.count()).select_from(Recipe)) == before  # rien n'entre en base
 
 
 def test_pas_les_memes_que_les_jours_precedents(db_session, env):
     first = daily.choose(db_session, env["user"], NOVEMBER)
-    assert len(first) == 3 and len({r.recipe_id for r in first}) == 3
     following = daily.choose(db_session, env["user"], NOVEMBER + timedelta(days=1))
-    assert [r.recipe_id for r in following] == [env["recipes"]["tomate"].id]  # la seule pas encore proposée
-    assert daily.stored(db_session, env["user"], NOVEMBER) == first
+    assert not set(titles(first)) & set(titles(following))
+    assert titles(following) == ["test-daily plat tomates courgettes"]  # la seule pas encore proposée
+    assert [r.recipe_ref for r in daily.stored(db_session, env["user"], NOVEMBER)] == [r.recipe_ref for r in first]
 
 
-def test_repas_deja_prevu_ecarte(client, db_session, env):
+def test_repas_deja_au_menu_ecarte(client, db_session, env):
     planned = env["recipes"]["potiron"]
-    response = client.post("/api/agenda", json={"recipe_id": str(planned.id), "meal_date": NOVEMBER.isoformat(),
+    response = client.post("/api/agenda", json={"recipe_ref": planned.url, "meal_date": (today() + timedelta(days=2)).isoformat(),
                                                 "slot": "dinner", "servings": 2})
     assert response.status_code == 201, response.text
-    assert "test-daily-potiron" not in titles(daily.rank(db_session, env["user"], NOVEMBER))
+    assert "test-daily soupe potiron" not in titles(daily.choose(db_session, env["user"], today()))
 
 
-def test_ia_seulement_en_dernier_recours(db_session, env, monkeypatch):
-    monkeypatch.setattr(daily, "propose", lambda *a, **k: [])
-    invented = db_session.scalar(select(Recipe).where(Recipe.id == env["recipes"]["pates"].id))
+def test_ia_seulement_en_dernier_recours(db_session, env, monkeypatch, web):
+    web.recipes.clear()
     calls = []
-    monkeypatch.setattr(daily, "_ai_recipes", lambda s, u, d, count, avoid: calls.append(count) or [invented])
 
+    def invented(session, user, day, count, avoid):
+        calls.append(count)
+        return []
+
+    monkeypatch.setattr(daily, "_ai_drafts", invented)
     assert daily.choose(db_session, env["user"], NOVEMBER) == []  # à l'ouverture de la page : jamais d'IA
     assert calls == []
-    rows = daily.choose(db_session, env["user"], NOVEMBER + timedelta(days=1), allow_ai=True)
-    assert calls == [3] and [(r.recipe_id, r.origin) for r in rows] == [(invented.id, "ia")]
+    daily.choose(db_session, env["user"], NOVEMBER + timedelta(days=1), allow_ai=True)
+    assert calls == [3]
 
 
-def test_nouveautes_marmiton_marquees(db_session, env):
-    fresh = {env["recipes"]["pates"].id: "soupe"}
-    rows = daily.choose(db_session, env["user"], NOVEMBER, fresh)
-    origins = {r.recipe_id: (r.origin, r.query) for r in rows}
-    assert origins.get(env["recipes"]["pates"].id, ("marmiton", "soupe")) == ("marmiton", "soupe")
-    assert all(o == "base" for rid, (o, _) in origins.items() if rid != env["recipes"]["pates"].id)
+def test_sites_varies(db_session, env, web):
+    for i in range(4):
+        web.add("marmiton", f"test-daily soupe {i} potiron poireau", ["800 g de potiron", "2 poireaux"], rating=5.0)
+    sites = [r.snapshot["site"] for r in daily.choose(db_session, env["user"], NOVEMBER)]
+    assert len(set(sites)) >= 2
 
 
 @pytest.mark.parametrize("title", [
@@ -113,22 +103,21 @@ def test_pas_de_fruits_dans_les_recherches_de_saison():
     assert {"potiron", "poireau"} <= pool and not pool & {"pomme", "poire", "clémentine", "kiwi"}
 
 
-def test_recherches_de_saison_qui_tournent():
-    days = [NOVEMBER + timedelta(days=i) for i in range(3)]
-    queries = [daily.queries_of_the_day(d) for d in days]
+def test_recherches_de_saison_qui_tournent(monkeypatch):
+    queries = [daily.queries_for_day(NOVEMBER + timedelta(days=i)) for i in range(3)]
     assert all(len(q) == 2 for q in queries)
     assert queries[0] != queries[1] != queries[2]
     assert "tomate" not in {q for qs in queries for q in qs}
 
 
-def test_api_recettes_du_jour(client, env):
+def test_api_recettes_du_jour(client, db_session, env):
+    db_session.execute(DailyRecipe.__table__.delete())
     response = client.get("/api/recipes/daily")
     assert response.status_code == 200, response.text
     body = response.json()
     assert len(body["recipes"]) == 3
     first = body["recipes"][0]
-    assert first["recipe"]["source"] == RecipeSource.MARMITON.value and first["origin"] == "base"
-    assert any(r.endswith("à acheter") or r == "Rien à acheter" for r in first["reasons"])
+    assert first["origin"] == "web" and first["recipe"]["id"].startswith("https://") and first["reasons"]
     assert client.get("/api/recipes/daily").json() == body  # même choix toute la journée
     client.cookies.clear()
     assert client.get("/api/recipes/daily").status_code == 401

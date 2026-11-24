@@ -41,9 +41,9 @@ class FakeClient:
 
 
 def request(**overrides):
-    values = dict(count=1, servings=4, max_purchases=2, diet="vegetarian",
-                  inventory=["Testcarotte : 6 pièce(s) (expire dans 2 j)"], basics=["Eau"],
-                  allergies=["Arachide"], dislikes=["Céleri"], utensils=["Four"], wish="plat réconfortant")
+    values = dict(count=1, servings=4, diet="vegetarian", ingredients=["Testcarotte", "Poireau"], only=False,
+                  tolerated=["eau", "sel"], allergies=["Arachide"], dislikes=["Céleri"], utensils=["Four"],
+                  wish="plat réconfortant")
     values.update(overrides)
     return GenerationRequest(**values)
 
@@ -58,8 +58,8 @@ def test_appel_a_claude_et_lecture_de_la_reponse():
     assert call["output_config"]["format"]["type"] == "json_schema"
     assert "thinking" not in call and "temperature" not in call
     prompt = call["messages"][0]["content"]
-    assert "Testcarotte : 6 pièce(s) (expire dans 2 j)" in prompt
-    assert "Allergies (interdit) : Arachide" in prompt and "au plus 2 aliment(s)" in prompt
+    assert "Ingrédients choisis : Testcarotte, Poireau" in prompt and "D'autres ingrédients peuvent" in prompt
+    assert "Allergies (interdit) : Arachide" in prompt and "Toujours disponible : eau, sel" in prompt
     assert recipes[0].title == "Gratin de testcarottes" and len(recipes[0].ingredients) == 3
 
 
@@ -74,8 +74,9 @@ def test_recette_incomplete_refusee():
         generate(request(), FakeClient(answer={"recipes": [{**ANSWER["recipes"][0], "steps": []}]}))
 
 
-def test_consigne_sans_achat():
-    assert "aucun : uniquement l'inventaire" in build_prompt(request(max_purchases=0))
+def test_consigne_uniquement_ces_ingredients():
+    assert "Uniquement ces ingrédients" in build_prompt(request(only=True))
+    assert "aucun (libre)" in build_prompt(request(ingredients=[]))
 
 
 @pytest.fixture
@@ -101,12 +102,14 @@ def test_generation_par_l_api(client, catalogue, monkeypatch):
     monkeypatch.setattr(recipes_api, "ai_generate", fake_generate)
     client.post("/api/auth/register", json={"username": "alice", "display_name": "Alice", "password": PASSWORD})
 
-    response = client.post("/api/recipes/generate", json={"count": 1, "wish": "plat réconfortant"})
+    response = client.post("/api/recipes/generate", json={"count": 1, "wish": "plat réconfortant", "ingredients": ["Testcarotte"]})
 
     assert response.status_code == 200, response.text
     card = response.json()[0]
     assert card["source"] == "ai" and card["status"] == "complete" and card["is_mine"] is False
-    detail = client.get(f"/api/recipes/{card['id']}", params={"servings": 4}).json()
+    assert card["id"].startswith("ai:") and card["recipe_id"] is None  # gardée en mémoire, pas en base
+    assert card["wanted_found"] == ["Testcarotte"]
+    detail = client.get("/api/recipes/view", params={"ref": card["id"], "servings": 4}).json()
     names = {i["name"]: i for i in detail["ingredients"]}
     assert names["Testcarotte"]["amount"] == "600 g"
     assert {u["name"] for u in detail["utensils"]} >= {"Four", "Plat à gratin"}
@@ -114,14 +117,16 @@ def test_generation_par_l_api(client, catalogue, monkeypatch):
 
     client.cookies.clear()
     client.post("/api/auth/register", json={"username": "bob", "display_name": "Bob", "password": PASSWORD})
-    assert client.get(f"/api/recipes/{card['id']}").status_code == 200  # recettes IA visibles par tous
+    assert client.get("/api/recipes/view", params={"ref": card["id"]}).status_code == 200  # visibles par tous
+    saved = client.put("/api/recipes/meta", params={"ref": card["id"]}, json={"is_favorite": True}).json()
+    assert saved["recipe_id"] and saved["source"] == "ai"  # mise en favori : enregistrée
 
 
 def test_limite_quotidienne(client, catalogue, monkeypatch):
     monkeypatch.setattr(recipes_api, "ai_generate", fake_generate)
-    monkeypatch.setattr(recipes_api, "AI_DAILY_LIMIT", 3)
     client.post("/api/auth/register", json={"username": "alice", "display_name": "Alice", "password": PASSWORD})
     assert client.post("/api/recipes/generate", json={"count": 3}).status_code == 200
+    monkeypatch.setattr(recipes_api, "ai_calls_today", lambda session, user: recipes_api.AI_DAILY_CALLS)
     assert client.post("/api/recipes/generate", json={"count": 1}).status_code == 429
 
 

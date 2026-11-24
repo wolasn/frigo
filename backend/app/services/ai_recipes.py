@@ -1,8 +1,8 @@
-"""Recettes proposées par l'IA (API Claude) à partir de l'inventaire.
+"""Recettes proposées par l'IA (API Claude) à partir des ingrédients choisis.
 
-Claude reçoit l'inventaire (avec les dates de péremption), le régime, les exclusions,
+Claude reçoit les ingrédients cochés (et s'il faut s'y limiter), le régime, les exclusions,
 les ustensiles et le nombre de personnes, et répond dans un format JSON imposé par un
-schéma. Chaque recette est ensuite rapprochée du catalogue comme une recette Marmiton :
+schéma. Chaque recette est ensuite rapprochée du catalogue comme une recette web :
 régime et score santé sont recalculés par l'application, jamais repris de l'IA.
 """
 
@@ -69,14 +69,13 @@ RECIPE_SCHEMA: dict[str, Any] = {
     },
 }
 
-SYSTEM_PROMPT = """Tu es le cuisinier d'une application française qui aide un foyer à cuisiner ce qu'il a, sans gaspiller.
+SYSTEM_PROMPT = """Tu es le cuisinier d'une application française qui aide un foyer à planifier ses repas.
 
 Tu proposes des recettes familiales réalistes, en français, faisables dans une cuisine ordinaire.
-- Utilise d'abord les aliments de l'inventaire, en priorité ceux qui expirent le plus tôt.
-- Respecte strictement le nombre d'achats autorisés : un aliment absent de l'inventaire compte comme un achat (les basiques toujours disponibles ne comptent pas).
+- Construis chaque recette autour des ingrédients choisis par l'utilisateur ; quand il demande « uniquement » ces ingrédients, n'en ajoute aucun autre que ceux listés comme toujours disponibles.
 - N'utilise jamais un aliment marqué « allergie ». Évite ceux marqués « n'aime pas ».
 - Respecte le régime demandé, et n'utilise que les ustensiles listés.
-- Nomme chaque ingrédient avec un nom courant et générique, au singulier, sans préparation (« oignon », pas « 2 oignons émincés ») ; reprends le nom exact de l'inventaire quand tu utilises un de ses aliments.
+- Nomme chaque ingrédient avec un nom courant et générique, au singulier, sans préparation (« oignon », pas « 2 oignons émincés ») ; reprends le nom exact d'un ingrédient choisi quand tu l'utilises.
 - Quantités pour le nombre de personnes demandé. Unité « piece » pour les aliments comptés à la pièce, « aucune » avec une quantité 0 pour un assaisonnement « à votre goût ».
 - Étapes courtes et claires, dans l'ordre, sans numérotation.
 - Ustensiles avec des noms simples (four, poêle, casserole, mixeur, plat à gratin…).
@@ -108,10 +107,10 @@ class AiNotConfigured(AiError):
 class GenerationRequest:
     count: int
     servings: int
-    max_purchases: int | None  # None = illimité, 0 = uniquement l'inventaire
     diet: str  # none | vegetarian | vegan
-    inventory: list[str]  # « Carotte : 6 pièces, expire dans 2 j »
-    basics: list[str]
+    ingredients: list[str]  # ingrédients cochés
+    only: bool  # uniquement ces ingrédients (plus ceux toujours disponibles)
+    tolerated: list[str]  # toujours disponibles : eau, sel…
     allergies: list[str]
     dislikes: list[str]
     utensils: list[str]
@@ -135,19 +134,14 @@ class GeneratedRecipe:
 
 def build_prompt(req: GenerationRequest) -> str:
     diet = {"none": "aucun", "vegetarian": "végétarien", "vegan": "vegan"}[req.diet]
-    purchases = (
-        "aucun : uniquement l'inventaire et les basiques" if req.max_purchases == 0
-        else "illimité" if req.max_purchases is None
-        else f"au plus {req.max_purchases} aliment(s) à acheter"
-    )
     lines = [
         f"Propose {req.count} recette(s) pour {req.servings} personne(s).",
-        f"Régime : {diet}. Achats autorisés : {purchases}.",
+        f"Régime : {diet}.",
         "",
-        "Inventaire disponible :",
-        *(f"- {line}" for line in req.inventory or ["(vide)"]),
-        "",
-        "Toujours disponible : " + (", ".join(req.basics) or "eau"),
+        "Ingrédients choisis : " + (", ".join(req.ingredients) or "aucun (libre)"),
+        ("Uniquement ces ingrédients, plus ceux toujours disponibles." if req.only and req.ingredients
+         else "D'autres ingrédients peuvent s'ajouter."),
+        "Toujours disponible : " + (", ".join(req.tolerated) or "eau"),
         "Allergies (interdit) : " + (", ".join(req.allergies) or "aucune"),
         "N'aime pas (à éviter) : " + (", ".join(req.dislikes) or "rien"),
         "Ustensiles : " + (", ".join(req.utensils) or "non précisés"),
@@ -243,4 +237,30 @@ def _validate(raw: dict, req: GenerationRequest) -> GeneratedRecipe:
         ingredients=ingredients,
         steps=steps,
         utensils=[str(u).strip() for u in raw.get("utensils", []) if str(u).strip()],
+    )
+
+
+def request_for(session, user, count: int, ingredients: list[str], only: bool = False, wish: str | None = None,
+                servings: int | None = None, diet: str | None = None) -> GenerationRequest:
+    """Demande à l'IA pour un utilisateur : ses préférences, exclusions, ustensiles et ingrédients tolérés."""
+    from sqlalchemy import select
+
+    from app.models import Food, UserExcludedFood, UserPreferences, UserUtensil, Utensil
+    from app.models.enums import ExclusionReason
+    from app.services.settings import get_setting
+
+    prefs = session.get(UserPreferences, user.id)
+    exclusions = session.execute(
+        select(Food.name, UserExcludedFood.reason).join(Food, Food.id == UserExcludedFood.food_id)
+        .where(UserExcludedFood.user_id == user.id)
+    ).all()
+    utensils = session.scalars(select(Utensil.name).join(UserUtensil, UserUtensil.utensil_id == Utensil.id)
+                               .where(UserUtensil.user_id == user.id)).all()
+    return GenerationRequest(
+        count=count, servings=servings or (prefs.default_servings if prefs else 2),
+        diet=diet or (prefs.diet.value if prefs else "none"), ingredients=list(ingredients), only=only,
+        tolerated=list(prefs.tolerated_ingredients) if prefs else ["eau", "sel", "huile d'olive", "poivre"],
+        allergies=[n for n, r in exclusions if r == ExclusionReason.ALLERGY],
+        dislikes=[n for n, r in exclusions if r == ExclusionReason.DISLIKE],
+        utensils=list(utensils), wish=(wish or "").strip() or None, model=get_setting(session, "ai_recipe_model"),
     )

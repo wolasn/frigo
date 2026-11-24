@@ -1,35 +1,31 @@
-"""Propositions de repas, fiches recettes, avis personnels et import Marmiton."""
+"""Recherche de recettes (sites web et recettes créées), fiches, avis personnels, IA et recettes du jour.
+
+Une recette est désignée par sa « référence » : son id en base, l'adresse de sa page sur un site, ou
+« ai:… » pour une recette inventée par l'IA (gardée en mémoire). Une recette web ou IA n'entre en base
+que lorsqu'on la programme, l'épingle ou la met en favori.
+"""
 
 import uuid
 from datetime import date
-from typing import Annotated, Any, Literal
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 
 from app.api.deps import CurrentUser, DbSession
 from app.clock import today
-from app.models import Recipe, RecipeStep, UserPreferences, UserRecipeMeta
+from app.models import IngredientTerm, Recipe, UserRecipeMeta
 from app.models.enums import Diet, Difficulty, RecipeSource, RecipeStatus, UserRole
-from app.services.ai_recipes import AiError, GenerationRequest
+from app.services.ingredients import normalize
+from app.services.ai_recipes import AiError
 from app.services.ai_recipes import generate as ai_generate
-from app.services.marmiton import MarmitonError
-from app.services.ai_usage import recorder
-from app.services.settings import get_setting
-from app.services.proposals import (
-    Evaluation,
-    Options,
-    default_inventory_ids,
-    evaluate_recipes,
-    propose,
-)
-from app.services.recipes import (
-    discovery_queries,
-    import_marmiton_url,
-    search_marmiton,
-    visible_recipes_clause,
-)
+from app.services.ai_recipes import request_for
+from app.services.ai_usage import AI_DAILY_CALLS, ai_calls_today, recorder
+from app.services.evaluation import Evaluation, Filters, default_filters, evaluate_all
+from app.services.recipes import Draft, load_drafts, persist
+from app.services.search import get_draft, memory, search
+from app.services.sources import SITES, SourceError, site_for_url
 
 router = APIRouter(prefix="/api", tags=["recettes"])
 
@@ -38,9 +34,12 @@ router = APIRouter(prefix="/api", tags=["recettes"])
 
 
 class RecipeCard(BaseModel):
-    id: uuid.UUID
+    id: str  # référence : id en base, adresse web ou « ai:… »
+    recipe_id: uuid.UUID | None  # rempli si la recette est en base
     title: str
     source: RecipeSource
+    site: str | None
+    site_label: str | None
     status: RecipeStatus
     is_mine: bool  # recette personnelle dont l'utilisateur est l'auteur
     image_url: str | None
@@ -52,17 +51,16 @@ class RecipeCard(BaseModel):
     is_vegan: bool
     is_vegetarian: bool
     health_score: float | None
+    site_rating: float | None  # note des internautes sur le site, sur 5
     # Avis personnel
     rating: int | None
     comment: str | None
     is_favorite: bool
     is_pinned: bool
-    times_cooked: int
-    last_cooked_on: date | None = None
-    # Évaluation par rapport au stock
+    # Évaluation
     servings: int
-    missing: list[str]
-    expiring_used: list[str]
+    wanted_found: list[str]  # ingrédients cochés présents
+    others: list[str]  # autres ingrédients (hors cochés et tolérés)
     missing_utensils: list[str]
     disliked: list[str]
 
@@ -72,9 +70,9 @@ class IngredientOut(BaseModel):
     name: str
     raw_text: str
     amount: str | None
-    status: str
-    expiring: bool
+    wanted: bool
     disliked: bool
+    optional: bool
 
 
 class UtensilState(BaseModel):
@@ -97,104 +95,40 @@ class MetaIn(BaseModel):
     is_pinned: bool | None = None
 
 
+class SearchIn(BaseModel):
+    ingredients: list[str] = Field(default_factory=list, max_length=20)
+    only: bool = False  # uniquement ces ingrédients (plus les tolérés du compte)
+    text: str | None = Field(default=None, max_length=80)
+    servings: int | None = Field(default=None, ge=1, le=999)
+    diet: Diet | None = None
+    difficulties: list[Difficulty] = Field(default_factory=list)
+    max_minutes: int | None = Field(default=None, ge=5, le=600)
+    min_health: float | None = Field(default=None, ge=0, le=10)
+    max_health: float | None = Field(default=None, ge=0, le=10)
+    include_missing_utensils: bool = False
+
+
+class SearchOut(BaseModel):
+    recipes: list[RecipeCard]
+    errors: list[str]  # sites qui n'ont pas répondu
+
+
 class ImportIn(BaseModel):
     url: str = Field(max_length=500)
 
 
-class SearchIn(BaseModel):
-    query: str = Field(min_length=2, max_length=80)
+class GenerateIn(BaseModel):
+    count: int = Field(default=2, ge=1, le=3)
+    servings: int | None = Field(default=None, ge=1, le=999)
+    diet: Diet | None = None
+    ingredients: list[str] = Field(default_factory=list, max_length=20)
+    only: bool = False
+    wish: str | None = Field(default=None, max_length=200)
 
 
-class DiscoverOut(BaseModel):
-    queries: list[str]
-    recipes: list[RecipeCard]
-
-
-# ---------- Outils ----------
-
-
-def _card(e: Evaluation, servings: int) -> dict:
-    r, m = e.recipe, e.meta
-    is_mine = r.source == RecipeSource.USER and e.viewer_id is not None and r.author_user_id == e.viewer_id
-    return dict(
-        id=r.id, title=r.title, source=r.source, status=r.status, is_mine=is_mine,
-        image_url=r.image_url, external_url=r.external_url,
-        base_servings=r.servings, prep_minutes=r.prep_minutes, cook_minutes=r.cook_minutes,
-        difficulty=r.difficulty, is_vegan=r.is_vegan, is_vegetarian=r.is_vegetarian,
-        health_score=float(r.health_score) if r.health_score is not None else None,
-        rating=m.rating if m else None, comment=m.comment if m else None,
-        is_favorite=bool(m and m.is_favorite), is_pinned=bool(m and m.is_pinned),
-        times_cooked=m.times_cooked if m else 0,
-        last_cooked_on=m.last_cooked_on if m else None,
-        servings=servings, missing=e.missing, expiring_used=e.expiring_used,
-        missing_utensils=e.missing_utensils, disliked=e.disliked,
-    )
-
-
-def _options(
-    session, user, servings: int | None, the_date: date | None, inventory_ids: list[uuid.UUID] | None,
-    max_purchases: int | None, diet: Diet | None, include_missing_utensils: bool, max_minutes: int | None,
-) -> Options:
-    preferences = session.get(UserPreferences, user.id)
-    return Options(
-        servings=servings or (preferences.default_servings if preferences else 2),
-        date=the_date or today(),
-        inventory_ids=inventory_ids if inventory_ids is not None else default_inventory_ids(session, user),
-        max_purchases=max_purchases,
-        diet=diet if diet is not None else (preferences.diet if preferences else Diet.NONE),
-        include_missing_utensils=include_missing_utensils,
-        max_minutes=max_minutes,
-    )
-
-
-def _visible_recipe(session, user, recipe_id: uuid.UUID) -> Recipe:
-    recipe = session.scalar(select(Recipe).where(Recipe.id == recipe_id, visible_recipes_clause(user)))
-    if recipe is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Recette introuvable.")
-    return recipe
-
-
-def _cards_for(session, user, recipe_ids: list[uuid.UUID], servings: int | None = None) -> list[RecipeCard]:
-    recipes = list(session.scalars(select(Recipe).where(Recipe.id.in_(recipe_ids), visible_recipes_clause(user))))
-    order = {rid: i for i, rid in enumerate(recipe_ids)}
-    recipes.sort(key=lambda r: order.get(r.id, 0))
-    options = _options(session, user, servings, None, None, None, None, True, None)
-    return [RecipeCard(**_card(e, options.servings)) for e in evaluate_recipes(session, user, options, recipes)]
-
-
-# ---------- Propositions ----------
-
-
-@router.get("/proposals")
-def list_proposals(
-    session: DbSession,
-    user: CurrentUser,
-    servings: Annotated[int | None, Query(ge=1, le=999)] = None,
-    mode: Literal["inventory", "purchases"] = "inventory",
-    max_purchases: Annotated[int | None, Query(ge=0, le=99)] = None,  # vide = illimité
-    diet: Diet | None = None,
-    on: date | None = None,
-    inventory_ids: Annotated[list[uuid.UUID] | None, Query()] = None,
-    include_missing_utensils: bool = False,
-    max_minutes: Annotated[int | None, Query(ge=5, le=600)] = None,
-    max_difficulty: Difficulty | None = None,
-    min_health: Annotated[float | None, Query(ge=0, le=10)] = None,
-) -> list[RecipeCard]:
-    limit = 0 if mode == "inventory" else max_purchases
-    options = _options(session, user, servings, on, inventory_ids, limit, diet, include_missing_utensils, max_minutes)
-    options.max_difficulty, options.min_health = max_difficulty, min_health
-    return [RecipeCard(**_card(e, options.servings)) for e in propose(session, user, options)]
-
-
-@router.get("/recipes/favorites")
-def list_favorites(session: DbSession, user: CurrentUser) -> list[RecipeCard]:
-    """Épinglés d'abord, puis favoris."""
-    metas = session.scalars(
-        select(UserRecipeMeta)
-        .where(UserRecipeMeta.user_id == user.id, or_(UserRecipeMeta.is_pinned, UserRecipeMeta.is_favorite))
-        .order_by(UserRecipeMeta.is_pinned.desc(), UserRecipeMeta.updated_at.desc())
-    ).all()
-    return _cards_for(session, user, [m.recipe_id for m in metas])
+class TermOut(BaseModel):
+    name: str
+    uses: int
 
 
 class DailyCard(BaseModel):
@@ -208,51 +142,131 @@ class DailyOut(BaseModel):
     recipes: list[DailyCard]
 
 
-@router.get("/recipes/daily")
-def daily_recipes(session: DbSession, user: CurrentUser) -> DailyOut:
-    """Trois recettes du jour : de saison, différentes des jours précédents."""
-    from app.services.daily import reasons, todays
-
-    rows = todays(session, user)
-    by_id = {r.recipe_id: r for r in rows}
-    recipes = list(session.scalars(select(Recipe).where(Recipe.id.in_(by_id), visible_recipes_clause(user))))
-    recipes.sort(key=lambda r: by_id[r.id].position)
-    options = _options(session, user, None, None, None, None, None, True, None)
-    cards = [
-        DailyCard(recipe=RecipeCard(**_card(e, options.servings)), origin=by_id[e.recipe.id].origin,
-                  reasons=reasons(e, today(), by_id[e.recipe.id].origin))
-        for e in evaluate_recipes(session, user, options, recipes)
-    ]
-    return DailyOut(day=today(), recipes=cards)
+# ---------- Outils ----------
 
 
-@router.get("/recipes/{recipe_id}")
-def recipe_detail(
-    recipe_id: uuid.UUID,
-    session: DbSession,
-    user: CurrentUser,
-    servings: Annotated[int | None, Query(ge=1, le=999)] = None,
-    inventory_ids: Annotated[list[uuid.UUID] | None, Query()] = None,
-) -> RecipeDetail:
-    recipe = _visible_recipe(session, user, recipe_id)
-    options = _options(session, user, servings, None, inventory_ids, None, None, True, None)
-    evaluation = evaluate_recipes(session, user, options, [recipe])[0]
-    steps = session.scalars(
-        select(RecipeStep.instruction).where(RecipeStep.recipe_id == recipe.id).order_by(RecipeStep.position)
-    ).all()
-    return RecipeDetail(
-        **_card(evaluation, options.servings),
-        ingredients=[IngredientOut(**vars(i)) for i in evaluation.ingredients],
-        utensils=[UtensilState(name=n, owned=o, optional=opt) for n, o, opt in evaluation.utensils],
-        steps=list(steps),
-        nutrition=recipe.nutrition_per_serving,
+def card(e: Evaluation, servings: int, viewer_id: uuid.UUID) -> dict:
+    r, m, d = e.recipe, e.meta, e.draft
+    return dict(
+        id=d.ref, recipe_id=r.id if d.in_db else None, title=r.title, source=r.source, site=r.site,
+        site_label=SITES[r.site].label if r.site in SITES else None, status=r.status,
+        is_mine=r.source == RecipeSource.USER and r.author_user_id == viewer_id,
+        image_url=r.image_url, external_url=r.external_url, base_servings=r.servings,
+        prep_minutes=r.prep_minutes, cook_minutes=r.cook_minutes, difficulty=r.difficulty,
+        is_vegan=bool(r.is_vegan), is_vegetarian=bool(r.is_vegetarian),
+        health_score=float(r.health_score) if r.health_score is not None else None, site_rating=d.rating,
+        rating=m.rating if m else None, comment=m.comment if m else None,
+        is_favorite=bool(m and m.is_favorite), is_pinned=bool(m and m.is_pinned),
+        servings=servings, wanted_found=e.wanted_found, others=e.others,
+        missing_utensils=e.missing_utensils, disliked=e.disliked,
     )
 
 
-@router.put("/recipes/{recipe_id}/meta")
-def update_meta(recipe_id: uuid.UUID, body: MetaIn, session: DbSession, user: CurrentUser) -> RecipeCard:
-    recipe = _visible_recipe(session, user, recipe_id)
-    meta = session.get(UserRecipeMeta, (user.id, recipe.id))
+def cards(session, user, drafts: list[Draft], filters: Filters | None = None) -> list[RecipeCard]:
+    filters = filters or default_filters(session, user)
+    return [RecipeCard(**card(e, filters.servings, user.id)) for e in evaluate_all(session, user, drafts, filters)]
+
+
+def _source_error(error: SourceError) -> HTTPException:
+    return HTTPException(status.HTTP_502_BAD_GATEWAY, detail=str(error))
+
+
+def resolve(session, user, ref: str) -> Draft:
+    try:
+        draft = get_draft(session, user, ref)
+    except SourceError as error:
+        raise _source_error(error) from None
+    if draft is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            detail="Recette introuvable (une recette inventée par l'IA n'est gardée qu'une journée).")
+    return draft
+
+
+def persist_ref(session, user, ref: str) -> Recipe:
+    """La recette en base (enregistrée maintenant si elle n'était qu'en mémoire)."""
+    draft = resolve(session, user, ref)
+    if draft.recipe.status != RecipeStatus.COMPLETE and draft.recipe.author_user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Recette introuvable.")
+    return persist(session, draft)
+
+
+# ---------- Recherche ----------
+
+
+@router.post("/recipes/search")
+def search_recipes(body: SearchIn, session: DbSession, user: CurrentUser) -> SearchOut:
+    """Recettes des sites et recettes créées, avec en priorité celles qui contiennent les ingrédients cochés."""
+    if not body.ingredients and not (body.text or "").strip():
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Coche au moins un ingrédient ou écris une recherche.")
+    filters = default_filters(
+        session, user, servings=body.servings, diet=body.diet, difficulties=set(body.difficulties),
+        max_minutes=body.max_minutes, min_health=body.min_health, max_health=body.max_health,
+        include_missing_utensils=body.include_missing_utensils, wanted=body.ingredients, only_wanted=body.only,
+    )
+    if filters.min_health is not None and filters.max_health is not None and filters.min_health > filters.max_health:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Score santé : le minimum dépasse le maximum.")
+    evaluations, errors = search(session, user, filters, body.text)
+    return SearchOut(recipes=[RecipeCard(**card(e, filters.servings, user.id)) for e in evaluations], errors=errors)
+
+
+@router.get("/ingredients")
+def list_ingredients(session: DbSession, user: CurrentUser, q: str = "", limit: int = Query(30, ge=1, le=100)) -> list[TermOut]:
+    """Ingrédients à cocher (vus dans les recettes des sites) : les plus courants, ou ceux qui contiennent `q`
+    (sans tenir compte des accents ni des majuscules ; ceux qui commencent par `q` d'abord)."""
+    rows = session.execute(select(IngredientTerm.name, IngredientTerm.uses).order_by(IngredientTerm.uses.desc())).all()
+    text = normalize(q.strip())
+    if text:
+        rows = [(n, u) for n, u in rows if text in normalize(n)]
+        rows.sort(key=lambda r: not normalize(r[0]).startswith(text))  # tri stable : l'usage départage
+    return [TermOut(name=n, uses=u) for n, u in rows[:limit]]
+
+
+@router.post("/recipes/import")
+def import_recipe(body: ImportIn, session: DbSession, user: CurrentUser) -> RecipeCard:
+    """Une recette d'un site à partir de son adresse (gardée en mémoire tant qu'on ne la garde pas)."""
+    if site_for_url(body.url) is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="Ce lien n'est pas une recette d'un site pris en charge (Marmiton, Cuisine AZ, Ptitchef).")
+    return cards(session, user, [resolve(session, user, body.url)])[0]
+
+
+# ---------- Fiches et avis ----------
+
+
+@router.get("/recipes/favorites")
+def list_favorites(session: DbSession, user: CurrentUser) -> list[RecipeCard]:
+    """Épinglés d'abord, puis favoris."""
+    metas = session.scalars(
+        select(UserRecipeMeta)
+        .where(UserRecipeMeta.user_id == user.id, or_(UserRecipeMeta.is_pinned, UserRecipeMeta.is_favorite))
+        .order_by(UserRecipeMeta.is_pinned.desc(), UserRecipeMeta.updated_at.desc())
+    ).all()
+    recipes = {r.id: r for r in session.scalars(select(Recipe).where(Recipe.id.in_([m.recipe_id for m in metas])))}
+    return cards(session, user, load_drafts(session, [recipes[m.recipe_id] for m in metas if m.recipe_id in recipes]))
+
+
+@router.get("/recipes/view")
+def recipe_detail(session: DbSession, user: CurrentUser, ref: str = Query(max_length=600),
+                  servings: int | None = Query(None, ge=1, le=999), ingredients: list[str] = Query(default=[])) -> RecipeDetail:
+    """La fiche d'une recette, par sa référence. `ingredients` : les ingrédients cochés, mis en évidence."""
+    draft = resolve(session, user, ref)
+    filters = default_filters(session, user, servings=servings, wanted=ingredients)
+    evaluation = evaluate_all(session, user, [draft], filters)[0]
+    return RecipeDetail(
+        **card(evaluation, filters.servings, user.id),
+        ingredients=[IngredientOut(id=i.id, name=i.name, raw_text=i.raw_text, amount=i.amount, wanted=i.wanted,
+                                   disliked=i.disliked, optional=i.optional) for i in evaluation.ingredients],
+        utensils=[UtensilState(name=n, owned=o, optional=opt) for n, o, opt in evaluation.utensils],
+        steps=draft.steps, nutrition=draft.recipe.nutrition_per_serving,
+    )
+
+
+@router.put("/recipes/meta")
+def update_meta(body: MetaIn, session: DbSession, user: CurrentUser, ref: str = Query(max_length=600)) -> RecipeCard:
+    """Note, commentaire, favori, épingle. Épingler ou mettre en favori garde la recette en base ; sans
+    favori, épingle ni repas, elle repart avec la purge de la nuit."""
+    draft = resolve(session, user, ref)
+    meta = session.get(UserRecipeMeta, (user.id, draft.recipe.id)) if draft.in_db else None
     current = {
         "rating": meta.rating if meta else None,
         "comment": meta.comment if meta else None,
@@ -266,130 +280,28 @@ def update_meta(recipe_id: uuid.UUID, body: MetaIn, session: DbSession, user: Cu
     # Vérifié avant toute modification : rien n'est écrit si la règle n'est pas respectée.
     if new["is_pinned"] and not new["comment"]:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Un repas épinglé doit avoir un commentaire.")
+    if not draft.in_db and not (new["is_favorite"] or new["is_pinned"]):
+        # Une note seule ne garde pas une recette web en base : rien à enregistrer.
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            detail="Épingle la recette, mets-la en favori ou programme-la pour la garder et la noter.")
+    recipe = persist(session, draft)
+    meta = session.get(UserRecipeMeta, (user.id, recipe.id))
     if meta is None:
-        meta = UserRecipeMeta(user_id=user.id, recipe_id=recipe.id, times_cooked=0)
+        meta = UserRecipeMeta(user_id=user.id, recipe_id=recipe.id)
         session.add(meta)
     for name, value in new.items():
         setattr(meta, name, value)
     session.commit()
-    return _cards_for(session, user, [recipe.id])[0]
+    return cards(session, user, load_drafts(session, [session.get(Recipe, recipe.id)]))[0]
 
 
-# ---------- Marmiton ----------
+# ---------- IA ----------
 
 
-def _marmiton_error(error: MarmitonError) -> HTTPException:
-    return HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Import Marmiton impossible : {error}")
-
-
-@router.post("/recipes/import", status_code=status.HTTP_201_CREATED)
-def import_recipe(body: ImportIn, session: DbSession, user: CurrentUser) -> RecipeCard:
+def ai_or_error(session, user, generate_call):
+    """Appelle l'IA ; les erreurs deviennent des réponses HTTP en français (et alertent l'administrateur si besoin)."""
     try:
-        recipe = import_marmiton_url(session, body.url)
-    except MarmitonError as error:
-        if "n'est pas une recette" in str(error):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from None
-        raise _marmiton_error(error) from None
-    return _cards_for(session, user, [recipe.id])[0]
-
-
-@router.post("/recipes/search")
-def search_recipes(body: SearchIn, session: DbSession, user: CurrentUser) -> list[RecipeCard]:
-    try:
-        ids = search_marmiton(session, body.query, limit=6)
-    except MarmitonError as error:
-        raise _marmiton_error(error) from None
-    return _cards_for(session, user, ids)
-
-
-class GenerateIn(BaseModel):
-    count: int = Field(default=2, ge=1, le=3)
-    servings: int | None = Field(default=None, ge=1, le=999)
-    max_purchases: int | None = Field(default=2, ge=0, le=99)  # vide = illimité
-    diet: Diet | None = None
-    wish: str | None = Field(default=None, max_length=200)
-
-
-AI_DAILY_LIMIT = 15  # recettes IA par utilisateur et par jour : chaque génération coûte quelques centimes
-
-
-def _generation_request(session, user, body: GenerateIn) -> GenerationRequest:
-    from datetime import timedelta as _td
-    from decimal import Decimal as _D
-
-    from app.models import Food, InventoryItem, UserExcludedFood, UserInfiniteFood, UserUtensil, Utensil
-    from app.models.enums import DateType, ExclusionReason, ItemKind
-    from app.services.planning import reserved_by_item
-    from app.services.shopping import display_quantity
-
-    options = _options(session, user, body.servings, None, None, None, body.diet, False, None)
-    items = session.execute(
-        select(InventoryItem, Food).join(Food, Food.id == InventoryItem.food_id).where(
-            InventoryItem.inventory_id.in_(options.inventory_ids), InventoryItem.archived_at.is_(None),
-            InventoryItem.kind == ItemKind.INGREDIENT,
-        )
-    ).all()
-    reserved = reserved_by_item(session, [i.id for i, _ in items])
-    # Par aliment : quantité disponible (hors réservations) et date de péremption la plus proche.
-    totals: dict = {}
-    soonest: dict = {}
-    foods: dict = {}
-    for item, food in items:
-        if item.expires_on < today() and item.date_type != DateType.BEST_BEFORE:
-            continue
-        available = item.quantity - reserved.get(item.id, _D(0))
-        if available <= 0:
-            continue
-        totals[food.id] = totals.get(food.id, _D(0)) + available
-        soonest[food.id] = min(soonest.get(food.id, item.expires_on), item.expires_on)
-        foods[food.id] = food
-    lines = []
-    for food_id in sorted(totals, key=lambda f: soonest[f]):
-        food, total = foods[food_id], totals[food_id]
-        quantity, unit = display_quantity(food, total)
-        unit_label = {"piece": "pièce(s)", "l": "L"}.get(unit, unit)
-        days = (soonest[food_id] - today()).days
-        lines.append(f"{food.name} : {quantity:f} {unit_label}".replace(".", ",") +
-                     (f" (expire dans {days} j)" if days <= 7 else ""))
-
-    exclusions = session.execute(
-        select(Food.name, UserExcludedFood.reason).join(Food, Food.id == UserExcludedFood.food_id)
-        .where(UserExcludedFood.user_id == user.id)
-    ).all()
-    basics = session.scalars(select(Food.name).where(
-        (Food.is_always_infinite.is_(True))
-        | Food.id.in_(select(UserInfiniteFood.food_id).where(UserInfiniteFood.user_id == user.id))
-    )).all()
-    utensils = session.scalars(select(Utensil.name).join(UserUtensil, UserUtensil.utensil_id == Utensil.id)
-                               .where(UserUtensil.user_id == user.id)).all()
-    return GenerationRequest(
-        count=body.count, servings=options.servings,
-        max_purchases=body.max_purchases,
-        diet=options.diet.value, inventory=lines, basics=list(basics),
-        allergies=[n for n, r in exclusions if r == ExclusionReason.ALLERGY],
-        dislikes=[n for n, r in exclusions if r == ExclusionReason.DISLIKE],
-        utensils=list(utensils), wish=(body.wish or "").strip() or None,
-        model=get_setting(session, "ai_recipe_model"),
-    )
-
-
-@router.post("/recipes/generate")
-def generate_recipes(body: GenerateIn, session: DbSession, user: CurrentUser) -> list[RecipeCard]:
-    """Recettes inventées par l'IA à partir de l'inventaire ; badge IA, visibles par tous."""
-    from datetime import datetime as _dt
-
-    from app.clock import APP_TIMEZONE
-    from app.services.ingredients import FoodMatcher
-    from app.services.recipes import build_ai_recipe
-
-    start_of_day = _dt.combine(today(), _dt.min.time(), tzinfo=APP_TIMEZONE)
-    done_today = session.scalar(select(func.count()).select_from(Recipe).where(
-        Recipe.source == RecipeSource.AI, Recipe.author_user_id == user.id, Recipe.created_at >= start_of_day))
-    if done_today + body.count > AI_DAILY_LIMIT:
-        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
-                            detail=f"Limite atteinte : {AI_DAILY_LIMIT} recettes IA par jour. Réessaie demain.")
-    try:
-        generated = ai_generate(_generation_request(session, user, body), on_usage=recorder(session, user, "recipe"))
+        return generate_call()
     except AiError as error:
         session.commit()  # le coût d'un appel facturé mais inutilisable est gardé
         if not error.needs_admin:
@@ -402,23 +314,48 @@ def generate_recipes(body: GenerateIn, session: DbSession, user: CurrentUser) ->
                   else "Les recettes IA sont momentanément indisponibles. L'administrateur a été prévenu.")
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail) from None
 
-    matcher = FoodMatcher(session)
-    ids = [build_ai_recipe(session, recipe, user, matcher).id for recipe in generated]
+
+@router.post("/recipes/generate")
+def generate_recipes(body: GenerateIn, session: DbSession, user: CurrentUser) -> list[RecipeCard]:
+    """Recettes inventées par l'IA autour des ingrédients cochés (gardées en mémoire une journée)."""
+    from app.services.ingredients import FoodMatcher
+    from app.services.recipes import build_ai_draft, standard_utensils
+
+    if ai_calls_today(session, user) >= AI_DAILY_CALLS:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
+                            detail=f"Limite atteinte : {AI_DAILY_CALLS} inventions par jour. Réessaie demain.")
+    request = request_for(session, user, body.count, body.ingredients, body.only, body.wish, body.servings,
+                          body.diet.value if body.diet else None)
+    generated = ai_or_error(session, user, lambda: ai_generate(request, on_usage=recorder(session, user, "recipe")))
     session.commit()
-    return _cards_for(session, user, ids, body.servings)
+    matcher, utensils = FoodMatcher(session), standard_utensils(session)
+    drafts = [build_ai_draft(g, user, matcher, utensils) for g in generated]
+    for draft in drafts:
+        memory.put(draft)
+    return cards(session, user, drafts, default_filters(session, user, servings=body.servings, wanted=body.ingredients))
 
 
-@router.post("/recipes/discover")
-def discover_recipes(session: DbSession, user: CurrentUser) -> DiscoverOut:
-    """Cherche sur Marmiton avec les aliments en stock (ceux qui expirent bientôt d'abord)."""
-    queries = discovery_queries(session, default_inventory_ids(session, user), max_queries=3)
-    if not queries:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Ajoute d'abord des aliments à ton inventaire.")
-    ids: list[uuid.UUID] = []
-    try:
-        for query in queries:
-            ids += [i for i in search_marmiton(session, query, limit=4) if i not in ids]
-    except MarmitonError as error:
-        if not ids:
-            raise _marmiton_error(error) from None
-    return DiscoverOut(queries=queries, recipes=_cards_for(session, user, ids))
+# ---------- Recettes du jour ----------
+
+
+@router.get("/recipes/daily")
+def daily_recipes(session: DbSession, user: CurrentUser) -> DailyOut:
+    """Trois recettes du jour : de saison, différentes des jours précédents."""
+    from app.services.daily import _food_names, reasons, todays, Pick
+    from app.services import season
+
+    filters = default_filters(session, user)
+    seasonal = _food_names(session, season.in_season(today(), fruits=False))
+    out = []
+    for row in todays(session, user):
+        try:
+            draft = get_draft(session, user, row.recipe_ref)
+        except SourceError:
+            draft = None
+        if draft is None:
+            continue  # recette inventée par l'IA oubliée (redémarrage) ou retirée du site
+        evaluation = evaluate_all(session, user, [draft], filters)[0]
+        hits = sorted({seasonal[i.food_id] for i in evaluation.ingredients if i.food_id in seasonal})
+        out.append(DailyCard(recipe=RecipeCard(**card(evaluation, filters.servings, user.id)), origin=row.origin,
+                             reasons=reasons(Pick(evaluation, 0, hits))))
+    return DailyOut(day=today(), recipes=out)

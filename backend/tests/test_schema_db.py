@@ -45,7 +45,7 @@ def new_user(conn, username: str, role: str = "user") -> str:
 def test_toutes_les_tables_existent_avec_rls(conn):
     tables = set(inspect(conn).get_table_names(schema="public")) - {"alembic_version"}
     assert tables == set(Base.metadata.tables)
-    assert len(tables) == 38  # + location_shelf_life, ai_usage, signup_invitations, daily_recipes
+    assert len(tables) == 30  # sans inventaire : agendas partagés, liste d'ingrédients, cache des recherches web
     without_rls = conn.execute(
         text("select relname from pg_class where relnamespace = 'public'::regnamespace and relkind = 'r' and not relrowsecurity")
     ).scalars().all()
@@ -66,49 +66,18 @@ def test_un_seul_super_admin_et_identifiant_sans_casse(conn):
     )
 
 
-def test_un_seul_inventaire_personnel_par_utilisateur(conn):
-    user = new_user(conn, "test_inventaire")
-    conn.execute(
-        text("insert into inventories (name, kind, personal_owner_id) values ('Mon frigo', 'personal', :u)"), {"u": user}
-    )
-    expect_violation(
-        conn, "insert into inventories (name, kind, personal_owner_id) values ('Autre', 'personal', :u)", {"u": user}
-    )
-    expect_violation(conn, "insert into inventories (name, kind) values ('Sans propriétaire', 'personal')")
+def test_recette_web_complete_avec_son_site(conn):
+    expect_violation(conn, "insert into recipes (title, source, status, servings, difficulty, external_url)"
+                           " values ('Soupe', 'web', 'complete', 4, 'easy', 'https://www.marmiton.org/x')")  # sans site
+    conn.execute(text("insert into recipes (title, source, status, servings, difficulty, external_url, site)"
+                      " values ('Soupe', 'web', 'complete', 4, 'easy', 'https://www.marmiton.org/x', 'marmiton')"))
 
 
-def test_article_range_dans_un_lieu_de_son_inventaire(conn):
-    user = new_user(conn, "test_lieux")
-    inv_a = conn.execute(
-        text("insert into inventories (name, kind, personal_owner_id) values ('A', 'personal', :u) returning id"),
-        {"u": user},
-    ).scalar_one()
-    inv_b = conn.execute(text("insert into inventories (name, kind) values ('B', 'shared') returning id")).scalar_one()
-    lieu_b = conn.execute(
-        text("insert into storage_locations (inventory_id, name, storage_type) values (:i, 'Frigo', 'fridge') returning id"),
-        {"i": inv_b},
-    ).scalar_one()
-    expect_violation(
-        conn,
-        "insert into inventory_items (inventory_id, kind, leftover_name, quantity, unit, storage_location_id,"
-        " expires_on, date_type) values (:i, 'leftover', 'Reste', 2, 'portion', :l, current_date + 3, 'estimated')",
-        {"i": inv_a, "l": lieu_b},
-    )
-
-
-def test_reste_en_parts_sans_ddm(conn):
-    inv = conn.execute(text("insert into inventories (name, kind) values ('Coloc', 'shared') returning id")).scalar_one()
-    lieu = conn.execute(
-        text("insert into storage_locations (inventory_id, name, storage_type) values (:i, 'Frigo', 'fridge') returning id"),
-        {"i": inv},
-    ).scalar_one()
-    base = (
-        "insert into inventory_items (inventory_id, kind, leftover_name, quantity, unit, storage_location_id,"
-        " expires_on, date_type) values (:i, 'leftover', 'Lasagnes', 2, '{unit}', :l, current_date + 3, '{dt}')"
-    )
-    conn.execute(text(base.format(unit="portion", dt="estimated")), {"i": inv, "l": lieu})
-    expect_violation(conn, base.format(unit="g", dt="estimated"), {"i": inv, "l": lieu})
-    expect_violation(conn, base.format(unit="portion", dt="best_before"), {"i": inv, "l": lieu})
+def test_ingredients_toleres_par_defaut(conn):
+    user = new_user(conn, "test_toleres")
+    conn.execute(text("insert into user_preferences (user_id) values (:u)"), {"u": user})
+    tolerated = conn.execute(text("select tolerated_ingredients from user_preferences where user_id = :u"), {"u": user}).scalar_one()
+    assert tolerated == ["eau", "sel", "huile d'olive", "poivre"]
 
 
 def test_epingler_exige_un_commentaire(conn):

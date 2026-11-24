@@ -25,13 +25,6 @@ class ReferenceUnit(StrEnum):
     PIECE = "piece"
 
 
-class ItemUnit(StrEnum):
-    GRAM = "g"
-    MILLILITER = "ml"
-    PIECE = "piece"
-    PORTION = "portion"  # uniquement pour les restes
-
-
 class StorageType(StrEnum):
     FRIDGE = "fridge"
     FREEZER = "freezer"
@@ -39,11 +32,6 @@ class StorageType(StrEnum):
     SPICE_RACK = "spice_rack"
     FRUIT_BOWL = "fruit_bowl"
     OTHER = "other"
-
-
-class InventoryKind(StrEnum):
-    PERSONAL = "personal"
-    SHARED = "shared"
 
 
 class MemberRole(StrEnum):
@@ -59,43 +47,9 @@ class InvitationStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
-class ItemKind(StrEnum):
-    INGREDIENT = "ingredient"
-    LEFTOVER = "leftover"
-
-
-class DateType(StrEnum):
-    USE_BY = "use_by"  # DLC
-    BEST_BEFORE = "best_before"  # DDM
-    ESTIMATED = "estimated"
-
-
-class RemovalReason(StrEnum):
-    CONSUMED = "consumed"
-    DISCARDED = "discarded"
-    GIVEN = "given"
-    COOKED = "cooked"
-    OTHER = "other"
-
-
 class ScanEngine(StrEnum):
     CLAUDE = "claude"
     LOCAL = "local"
-
-
-class ScanStatus(StrEnum):
-    ANALYZING = "analyzing"
-    REVIEW = "review"
-    VALIDATED = "validated"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
-
-
-class LineDecision(StrEnum):
-    PENDING = "pending"
-    ACCEPTED = "accepted"
-    EDITED = "edited"
-    REJECTED = "rejected"
 
 
 class UtensilCategory(StrEnum):
@@ -105,7 +59,7 @@ class UtensilCategory(StrEnum):
 
 
 class RecipeSource(StrEnum):
-    MARMITON = "marmiton"
+    WEB = "web"  # recette lue sur un site (Marmiton, Cuisine AZ, Ptitchef)
     AI = "ai"
     USER = "user"
 
@@ -133,12 +87,6 @@ class MealSlot(StrEnum):
     SNACK = "snack"
 
 
-class MealStatus(StrEnum):
-    PLANNED = "planned"
-    DONE = "done"
-    CANCELLED = "cancelled"
-
-
 class ShoppingOrigin(StrEnum):
     GENERATED = "generated"
     MANUAL = "manual"
@@ -146,7 +94,7 @@ class ShoppingOrigin(StrEnum):
 
 class NotificationType(StrEnum):
     MEAL_NOT_MARKED = "meal_not_marked"
-    INVENTORY_INVITATION = "inventory_invitation"
+    AGENDA_INVITATION = "agenda_invitation"
     RECIPE_SHARED = "recipe_shared"
-    REMOVED_FROM_INVENTORY = "removed_from_inventory"
+    REMOVED_FROM_AGENDA = "removed_from_agenda"
     SYSTEM = "system"

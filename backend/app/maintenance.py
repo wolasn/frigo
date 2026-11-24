@@ -1,28 +1,18 @@
-"""Purges nocturnes : historique au-delà d'un mois, analyses photo, sessions expirées…"""
+"""Purges nocturnes : recettes que plus rien ne retient, achats d'il y a un mois, sessions expirées…"""
 
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, exists, select
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
-from app.models import (
-    SignupInvitation,
-    AuthSession,
-    DailyRecipe,
-    InventoryItem,
-    InventoryRemoval,
-    Notification,
-    PhotoScan,
-    PlannedMeal,
-    ShoppingListItem,
-)
-from app.models.enums import ScanStatus
+from app.models import AuthSession, DailyRecipe, Notification, ShoppingListItem, SignupInvitation, WebSearchCache
+from app.services.recipes import purge_unused_recipes
 
 logger = logging.getLogger("frigo.maintenance")
 
 HISTORY_DAYS = 30
-PHOTO_DAYS = 30
+SEARCH_CACHE_DAYS = 7
 READ_NOTIFICATION_DAYS = 90
 
 
@@ -31,23 +21,11 @@ def purge(session: Session, now: datetime | None = None) -> dict[str, int]:
     month_ago = now - timedelta(days=HISTORY_DAYS)
     counts = {}
 
-    counts["retraits"] = session.execute(
-        delete(InventoryRemoval).where(InventoryRemoval.removed_at < month_ago)
-    ).rowcount
+    # Recettes web ou IA ni programmées, ni épinglées, ni en favori, ni partagées.
+    counts["recettes"] = purge_unused_recipes(session)
 
-    # Articles archivés depuis plus d'un mois, sans historique restant ni repas qui les mentionne.
-    counts["articles archivés"] = session.execute(
-        delete(InventoryItem).where(
-            InventoryItem.archived_at < month_ago,
-            ~exists().where(InventoryRemoval.inventory_item_id == InventoryItem.id),
-            ~exists().where(PlannedMeal.leftover_item_id == InventoryItem.id),
-        )
-    ).rowcount
-
-    counts["analyses photo"] = session.execute(
-        delete(PhotoScan).where(
-            PhotoScan.created_at < now - timedelta(days=PHOTO_DAYS), PhotoScan.status != ScanStatus.ANALYZING
-        )
+    counts["recherches web"] = session.execute(
+        delete(WebSearchCache).where(WebSearchCache.fetched_at < now - timedelta(days=SEARCH_CACHE_DAYS))
     ).rowcount
 
     counts["sessions expirées"] = session.execute(delete(AuthSession).where(AuthSession.expires_at < now)).rowcount
@@ -64,7 +42,7 @@ def purge(session: Session, now: datetime | None = None) -> dict[str, int]:
         delete(Notification).where(Notification.read_at < now - timedelta(days=READ_NOTIFICATION_DAYS))
     ).rowcount
 
-    counts["achats manuels"] = session.execute(
+    counts["achats"] = session.execute(
         delete(ShoppingListItem).where(ShoppingListItem.purchased_at < month_ago)
     ).rowcount
 

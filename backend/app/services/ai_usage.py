@@ -43,3 +43,18 @@ def record(session: Session, user: User, kind: str, model: str, input_tokens: in
 def recorder(session: Session, user: User, kind: str):
     """Fonction à passer aux moteurs IA : appelée avec (modèle, jetons entrée, jetons sortie) après chaque réponse."""
     return lambda model, input_tokens, output_tokens: record(session, user, kind, model, input_tokens, output_tokens)
+
+
+AI_DAILY_CALLS = 8  # inventions de recettes par l'IA, par utilisateur et par jour (chacune coûte quelques centimes)
+
+
+def ai_calls_today(session: Session, user: User) -> int:
+    from datetime import datetime
+
+    from sqlalchemy import func, select
+
+    from app.clock import APP_TIMEZONE, today
+
+    start = datetime.combine(today(), datetime.min.time(), tzinfo=APP_TIMEZONE)
+    return session.scalar(select(func.count()).select_from(AiUsage).where(
+        AiUsage.user_id == user.id, AiUsage.kind == "recipe", AiUsage.created_at >= start)) or 0

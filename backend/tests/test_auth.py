@@ -3,8 +3,8 @@ from sqlalchemy import select, update
 
 from app.api.deps import SESSION_COOKIE
 from app.cli import set_super_admin
-from app.models import Inventory, InventoryMember, StorageLocation, User, UserPreferences
-from app.models.enums import InventoryKind, MemberRole, UserRole
+from app.models import User, UserPreferences, UserUtensil
+from app.models.enums import UserRole
 
 PASSWORD = "un-mot-de-passe-solide"
 
@@ -15,7 +15,7 @@ def register(client, username="alice", password=PASSWORD, display_name="Alice"):
     )
 
 
-def test_inscription_cree_compte_preferences_et_inventaire_personnel(client, db_session):
+def test_inscription_cree_compte_preferences_et_ustensiles(client, db_session):
     response = register(client)
 
     assert response.status_code == 201
@@ -25,14 +25,7 @@ def test_inscription_cree_compte_preferences_et_inventaire_personnel(client, db_
 
     user = db_session.scalar(select(User).where(User.username == "alice"))
     assert db_session.get(UserPreferences, user.id) is not None
-    inventory = db_session.scalar(select(Inventory).where(Inventory.personal_owner_id == user.id))
-    assert inventory.kind == InventoryKind.PERSONAL
-    member = db_session.get(InventoryMember, (inventory.id, user.id))
-    assert member.role == MemberRole.ADMIN
-    locations = db_session.scalars(
-        select(StorageLocation.name).where(StorageLocation.inventory_id == inventory.id).order_by(StorageLocation.position)
-    ).all()
-    assert locations == ["Frigo", "Congélateur", "Placard", "Épices", "Corbeille à fruits"]
+    assert db_session.scalar(select(UserUtensil).where(UserUtensil.user_id == user.id).limit(1)) is not None
 
 
 def test_le_mot_de_passe_est_hache(client, db_session):

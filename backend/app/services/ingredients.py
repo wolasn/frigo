@@ -81,7 +81,7 @@ _NUMBER = re.compile(r"^(\d+(?:[.,]\d+)?)(?:\s*/\s*(\d+))?(?:\s*(?:a|-)\s*\d+(?:
 
 
 def parse_ingredient(raw: str) -> ParsedIngredient:
-    text = raw.strip()
+    text = re.sub(r"\((?:s|x|es)\)", "", raw.strip(), flags=re.I)  # « Pomme(s) de terre », « Poireau(x) »
     for symbol, fraction in FRACTIONS.items():
         text = text.replace(symbol, f" {fraction} ")
     text = normalize(text)

@@ -28,7 +28,6 @@ from app.services.accounts import (
     delete_account,
     find_user_by_username,
 )
-from app.services.planning import recompute_reservations
 
 router = APIRouter(prefix="/api/auth", tags=["authentification"])
 
@@ -189,7 +188,6 @@ def delete_my_account(body: DeleteAccountIn, session: DbSession, user: CurrentUs
             status.HTTP_409_CONFLICT,
             detail="Le super-administrateur doit d'abord transmettre son rôle (commande super-admin --replace).",
         ) from None
-    recompute_reservations(session)
     session.commit()
     response.delete_cookie(SESSION_COOKIE, path="/")
 

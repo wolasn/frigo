@@ -6,25 +6,14 @@ from app.models.accounts import (
     AuthSession,
     SignupInvitation,
     User,
-    UserCategoryThreshold,
     UserExcludedFood,
     UserPreferences,
 )
 from app.models.base import Base
-from app.models.catalog import Food, FoodAlias, FoodCategory, FoodShelfLife, UnitConversion, UserInfiniteFood
-from app.models.inventory import (
-    Inventory,
-    InventoryInvitation,
-    InventoryItem,
-    InventoryMember,
-    InventoryRemoval,
-    LocationShelfLife,
-    StorageLocation,
-)
-from app.models.photo import PhotoScan, PhotoScanLine
-from app.models.planning import DailyRecipe, Notification, PlannedMeal, Reservation, ShoppingListItem, ShoppingListItemMeal
+from app.models.catalog import Food, FoodAlias, FoodCategory, FoodShelfLife, UnitConversion
+from app.models.planning import DailyRecipe, Notification, PlannedMeal, ShoppingListItem, ShoppingListItemMeal
 from app.models.recipes import (
-    MarmitonSearchCache,
+    IngredientTerm,
     Recipe,
     RecipeIngredient,
     RecipeShare,
@@ -33,13 +22,40 @@ from app.models.recipes import (
     Utensil,
     UserRecipeMeta,
     UserUtensil,
+    WebSearchCache,
 )
+from app.models.sharing import AgendaInvitation, AgendaMember, SharedAgenda
 
 __all__ = [
-    "AiUsage", "AppSetting", "AuthSession", "Base", "Food", "FoodAlias", "FoodCategory", "FoodShelfLife", "Inventory",
-    "InventoryInvitation", "InventoryItem", "InventoryMember", "InventoryRemoval", "LocationShelfLife", "MarmitonSearchCache",
-    "DailyRecipe", "Notification", "PhotoScan", "PhotoScanLine", "PlannedMeal", "Recipe", "RecipeIngredient", "RecipeShare",
-    "RecipeStep", "RecipeUtensil", "Reservation", "ShoppingListItem", "SignupInvitation", "ShoppingListItemMeal", "StorageLocation",
-    "UnitConversion", "User", "UserCategoryThreshold", "UserExcludedFood", "UserInfiniteFood", "UserPreferences",
-    "UserRecipeMeta", "UserUtensil", "Utensil",
+    "AgendaInvitation",
+    "AgendaMember",
+    "AiUsage",
+    "AppSetting",
+    "AuthSession",
+    "Base",
+    "DailyRecipe",
+    "Food",
+    "FoodAlias",
+    "FoodCategory",
+    "FoodShelfLife",
+    "IngredientTerm",
+    "Notification",
+    "PlannedMeal",
+    "Recipe",
+    "RecipeIngredient",
+    "RecipeShare",
+    "RecipeStep",
+    "RecipeUtensil",
+    "SharedAgenda",
+    "ShoppingListItem",
+    "ShoppingListItemMeal",
+    "SignupInvitation",
+    "UnitConversion",
+    "User",
+    "UserExcludedFood",
+    "UserPreferences",
+    "UserRecipeMeta",
+    "UserUtensil",
+    "Utensil",
+    "WebSearchCache",
 ]

@@ -1,16 +1,10 @@
-"""Agenda et réservations, sur la vraie base (transaction annulée), sans appel à Marmiton."""
+"""Agenda : programmer (toutes dates), déplacer, remplacer, retirer ; agendas partagés ; propositions."""
 
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import select
 
 from app.clock import today
-from app.models import Food, FoodCategory, Inventory, InventoryMember, StorageLocation, User
-from app.models.enums import Difficulty, InventoryKind, MemberRole, ReferenceUnit, StorageType
-from app.services.ingredients import FoodMatcher
-from app.services.marmiton import MarmitonRecipe
-from app.services.recipes import build_marmiton_recipe
 
 PASSWORD = "un-mot-de-passe-solide"
 
@@ -20,20 +14,9 @@ def day(n):
 
 
 @pytest.fixture
-def env(client, db_session):
-    category = FoodCategory(name="Test légumes", aisle="Fruits et légumes")
-    db_session.add(category)
-    db_session.flush()
-    carotte = Food(name="Testcarotte", category_id=category.id, reference_unit=ReferenceUnit.GRAM,
-                   is_vegan=True, is_vegetarian=True)
-    db_session.add(carotte)
-    db_session.flush()
-    recipe = build_marmiton_recipe(db_session, MarmitonRecipe(
-        url="https://www.marmiton.org/recettes/recette_test-puree_1.aspx", title="test-puree", servings=4,
-        prep_minutes=10, cook_minutes=20, image_url=None, ingredients=["500 g de testcarottes"],
-        steps=["Écrasez."], difficulty=Difficulty.EASY, nutrition=None,
-    ), FoodMatcher(db_session))
-    db_session.flush()
+def env(client, saved_recipe, web):
+    recipe = saved_recipe("test-puree carottes", ["500 g de carottes"])
+    other = web.add("cuisineaz", "test-poelee courgettes", ["2 courgettes"])
 
     def login(username):
         client.cookies.clear()
@@ -41,181 +24,88 @@ def env(client, db_session):
         if response.status_code != 200:
             client.post("/api/auth/register", json={"username": username, "display_name": username, "password": PASSWORD})
 
-    login("alice")
-    inventory = client.get("/api/inventories").json()[0]
-    fridge = next(l["id"] for l in inventory["locations"] if l["storage_type"] == "fridge")
-
-    def stock(grams, expires_in):
-        response = client.post(f"/api/inventories/{inventory['id']}/items", json={
-            "food_id": str(carotte.id), "quantity": grams, "unit": "g", "storage_location_id": fridge,
-            "expires_on": day(expires_in)})
-        assert response.status_code == 201, response.text
-        return response.json()
-
-    def plan(on, servings=4, slot="dinner", **extra):
-        body = {"recipe_id": str(recipe.id), "meal_date": day(on), "slot": slot, "servings": servings, **extra}
+    def plan(on, servings=4, slot="dinner", ref=None, **extra):
+        body = {"recipe_ref": ref or str(recipe.id), "meal_date": day(on), "slot": slot, "servings": servings, **extra}
         return client.post("/api/agenda", json=body)
 
-    return {"recipe": recipe, "inventory": inventory, "fridge": fridge, "stock": stock, "plan": plan,
-            "login": login, "carotte": carotte}
+    login("alice")
+    return {"recipe": recipe, "other": other, "plan": plan, "login": login}
 
 
-def items(client, inventory_id):
-    return client.get(f"/api/inventories/{inventory_id}/items").json()["items"]
+def meals(client, start=-30, end=30):
+    return client.get("/api/agenda", params={"start": day(start), "end": day(end)}).json()
 
 
-def test_reservation_puis_manque(client, env):
-    env["stock"](1000, 10)
-    first = env["plan"](1)
-    assert first.status_code == 201 and first.json()["shortages"] == []
-    assert items(client, env["inventory"]["id"])[0]["reserved"] == 500
-
+def test_programmer_a_toutes_les_dates(client, env):
+    past = env["plan"](-5)
+    assert past.status_code == 201, past.text  # passé compris
     env["plan"](2)
-    third = env["plan"](3).json()
-    assert [s["name"] for s in third["shortages"]] == ["Testcarotte : pas assez en stock"]
+    env["plan"](2)  # plusieurs repas sur un même moment
+    listed = meals(client)
+    assert [m["meal_date"] for m in listed] == [day(-5), day(2), day(2)]
+    assert [m["position"] for m in listed if m["meal_date"] == day(2)] == [0, 1]
+    assert {"status", "kind", "shortages"}.isdisjoint(listed[0])  # plus de suivi « cuisiné », de restes ni de stock
 
 
-def test_les_reservations_limitent_les_propositions(client, env):
-    env["stock"](1000, 10)
-    titles = lambda: [r["title"] for r in client.get("/api/proposals", params={"mode": "inventory", "servings": 4}).json()]
-    assert "test-puree" in titles()
-    env["plan"](1)
-    env["plan"](2)
-    assert "test-puree" not in titles()
+def test_programmer_une_recette_web_l_enregistre(client, env):
+    response = env["plan"](1, ref=env["other"].url)
+    assert response.status_code == 201, response.text
+    assert response.json()["title"] == "test-poelee courgettes"
+    assert client.post("/api/agenda", json={"recipe_ref": "https://example.com/x", "meal_date": day(1), "slot": "lunch",
+                                            "servings": 2}).status_code == 404
 
 
-def test_deplacement_apres_peremption(client, env):
-    env["stock"](1000, 3)
+def test_deplacer_remplacer_retirer(client, env):
     meal = env["plan"](1).json()
-
-    preview = client.post(f"/api/agenda/{meal['id']}/preview-move", json={"meal_date": day(5)}).json()
-
-    assert preview["warnings"] == [f"Testcarotte sera périmé avant le {(today() + timedelta(days=5)).strftime('%d/%m')}"]
-
-
-def test_deplacement_qui_prive_un_autre_repas(client, env):
-    env["stock"](600, 10)
-    env["plan"](2)
-    second = env["plan"](4).json()
-    assert second["shortages"]  # 100 g manquent
-
-    preview = client.post(f"/api/agenda/{second['id']}/preview-move", json={"meal_date": day(1)}).json()
-    when = (today() + timedelta(days=2)).strftime("%d/%m")
-    assert preview["warnings"] == [f"Le repas « test-puree » du {when} manquera de Testcarotte"]
-
-    moved = client.patch(f"/api/agenda/{second['id']}", json={"meal_date": day(1)}).json()
-    assert moved["meal"]["shortages"] == [] and moved["warnings"]
+    moved = client.patch(f"/api/agenda/{meal['id']}", json={"meal_date": day(-2), "slot": "lunch", "servings": 2})
+    assert moved.status_code == 200 and (moved.json()["meal_date"], moved.json()["slot"], moved.json()["servings"]) == (day(-2), "lunch", 2)
+    replaced = client.post(f"/api/agenda/{meal['id']}/replace", json={"recipe_ref": env["other"].url})
+    assert replaced.status_code == 200 and replaced.json()["title"] == "test-poelee courgettes"
+    assert client.delete(f"/api/agenda/{meal['id']}").status_code == 204
+    assert meals(client) == []
+    assert client.post(f"/api/agenda/{meal['id']}/done", json={}).status_code in (404, 405)
 
 
-def test_pas_d_avertissement_pour_un_manque_deja_present(client, env):
-    env["stock"](100, 10)  # le repas manque déjà de carottes
-    meal = env["plan"](1).json()
-    assert meal["shortages"]
-    preview = client.post(f"/api/agenda/{meal['id']}/preview-move", json={"meal_date": day(2)}).json()
-    assert preview["warnings"] == []
-
-
-def test_repas_cuisine_deduit_le_stock_et_cree_un_reste(client, env):
-    env["stock"](1000, 10)
-    meal = env["plan"](0).json()
-
-    done = client.post(f"/api/agenda/{meal['id']}/done", json={"leftover_portions": 2})
-
-    assert done.status_code == 200 and done.json()["status"] == "done"
-    stock = {i["name"]: i for i in items(client, env["inventory"]["id"])}
-    assert stock["Testcarotte"]["quantity"] == 500
-    assert stock["Reste de test-puree"]["quantity"] == 2 and stock["Reste de test-puree"]["unit"] == "portion"
-    history = client.get(f"/api/inventories/{env['inventory']['id']}/removals").json()
-    assert history[0]["reason"] == "cooked"
-    detail = client.get(f"/api/recipes/{env['recipe'].id}").json()
-    assert detail["times_cooked"] == 1
-
-
-def test_plusieurs_recettes_sur_un_creneau_et_dates_passees(client, env):
-    positions = [env["plan"](1).json()["position"] for _ in range(3)]
-    assert positions == [0, 1, 2]
-    assert env["plan"](-1).status_code == 422
-
-
-def test_reste_planifie_puis_mange(client, env):
-    leftover = client.post(f"/api/inventories/{env['inventory']['id']}/items", json={
-        "kind": "leftover", "leftover_name": "Lasagnes", "quantity": 2, "storage_location_id": env["fridge"]}).json()
-    meal = client.post("/api/agenda", json={"leftover_item_id": leftover["id"], "meal_date": day(0),
-                                            "slot": "lunch", "servings": 2}).json()
-    assert meal["kind"] == "leftover" and meal["shortages"] == []
-
-    client.post(f"/api/agenda/{meal['id']}/done", json={})
-    assert [i["name"] for i in items(client, env["inventory"]["id"])] == []
-
-
-def test_agenda_partage_droits(client, db_session, env):
+def test_agenda_partage_droits(client, env):
     env["login"]("bob")
     env["login"]("alice")
-    alice, bob = (db_session.scalar(select(User).where(User.username == n)) for n in ("alice", "bob"))
-    shared = Inventory(name="Coloc", kind=InventoryKind.SHARED, created_by=alice.id)
-    db_session.add(shared)
-    db_session.flush()
-    db_session.add_all([
-        InventoryMember(inventory_id=shared.id, user_id=alice.id, role=MemberRole.ADMIN),
-        InventoryMember(inventory_id=shared.id, user_id=bob.id, role=MemberRole.MEMBER),
-        StorageLocation(inventory_id=shared.id, name="Frigo", storage_type=StorageType.FRIDGE),
-    ])
-    db_session.flush()
-
-    meal = env["plan"](1, shared_inventory_id=str(shared.id))
-    assert meal.status_code == 201 and meal.json()["agenda_name"] == "Coloc"
+    agenda = client.post("/api/agendas", json={"name": "Coloc"}).json()
+    client.post(f"/api/agendas/{agenda['id']}/invitations", json={"username": "bob"})
+    meal = env["plan"](1, shared_agenda_id=agenda["id"]).json()
+    assert meal["agenda_name"] == "Coloc"
 
     env["login"]("bob")
-    assert env["plan"](2, shared_inventory_id=str(shared.id)).status_code == 403
-    listed = client.get("/api/agenda", params={"start": day(0), "end": day(7)}).json()
-    assert [m["agenda_name"] for m in listed] == ["Coloc"] and listed[0]["can_edit"] is False
-    assert client.patch(f"/api/agenda/{listed[0]['id']}", json={"meal_date": day(3)}).status_code == 403
-    assert client.post(f"/api/agenda/{listed[0]['id']}/done", json={}).status_code == 200
+    invitation = client.get("/api/invitations").json()[0]
+    client.post(f"/api/invitations/{invitation['id']}/accept")
+    assert [m["id"] for m in meals(client)] == [meal["id"]]
+    assert meals(client)[0]["can_edit"] is False  # simple membre
+    assert env["plan"](2, shared_agenda_id=agenda["id"]).status_code == 403
+    assert client.delete(f"/api/agenda/{meal['id']}").status_code == 403
 
-
-def test_reservation_infime_ignoree(client, db_session, env):
-    """Une part trop petite pour la précision de la base (millième) ne bloque pas le recalcul."""
-    from decimal import Decimal
-
-    from app.models import Recipe, RecipeIngredient
-    from app.models.enums import RecipeSource, RecipeStatus
-
-    recipe = Recipe(title="test-pincee", source=RecipeSource.AI, status=RecipeStatus.COMPLETE, servings=6,
-                    difficulty=Difficulty.EASY)
-    db_session.add(recipe)
-    db_session.flush()
-    db_session.add(RecipeIngredient(recipe_id=recipe.id, position=0, raw_text="1 mg de testcarotte",
-                                    food_id=env["carotte"].id, quantity=Decimal("0.001"), unit="g",
-                                    quantity_ref=Decimal("0.001")))
-    db_session.flush()
-    env["stock"](500, 10)
-    response = client.post("/api/agenda", json={"recipe_id": str(recipe.id), "meal_date": day(1), "slot": "dinner", "servings": 1})
-    assert response.status_code == 201, response.text  # 0,001 g × 1/6 ≈ 0,0002 g : arrondi à 0, ignoré
-
-
-def test_recalcul_limite_au_groupe(client, db_session, env):
-    """Le moteur ne recalcule que le groupe de l'utilisateur ; les réservations des autres restent."""
-    from app.models import InventoryMember, Reservation, User
-    from app.services.planning import scope_of
-
-    env["stock"](1000, 10)
-    alice_meal = env["plan"](1).json()
+    env["login"]("alice")
+    bob = next(m for m in client.get(f"/api/agendas/{agenda['id']}").json()["members"] if m["username"] == "bob")
+    client.patch(f"/api/agendas/{agenda['id']}/members/{bob['user_id']}", json={"role": "contributor"})
     env["login"]("bob")
-    bob_inventory = client.get("/api/inventories").json()[0]
-    fridge = next(l["id"] for l in bob_inventory["locations"] if l["storage_type"] == "fridge")
-    client.post(f"/api/inventories/{bob_inventory['id']}/items", json={
-        "food_id": str(env["carotte"].id), "quantity": 1000, "unit": "g", "storage_location_id": fridge, "expires_on": day(10)})
-    bob_meal = env["plan"](2).json()
-    reserved = lambda meal: db_session.scalar(select(Reservation.quantity).where(Reservation.planned_meal_id == meal["id"]))
-    assert reserved(alice_meal) == 500 and reserved(bob_meal) == 500
+    assert env["plan"](3, shared_agenda_id=agenda["id"]).status_code == 201
 
-    alice = db_session.scalar(select(User).where(User.username == "alice"))
-    bob = db_session.scalar(select(User).where(User.username == "bob"))
-    assert scope_of(db_session, bob.id).users == {bob.id}  # rien de partagé : groupe d'une personne
-    client.post(f"/api/agenda/{bob_meal['id']}/cancel")  # action de Bob : la réservation d'Alice reste
-    assert reserved(alice_meal) == 500 and reserved(bob_meal) is None
 
-    shared = client.post("/api/inventories", json={"name": "Coloc groupe"}).json()
-    db_session.add(InventoryMember(inventory_id=shared["id"], user_id=alice.id, role=MemberRole.MEMBER))
-    db_session.flush()
-    assert scope_of(db_session, bob.id).users == {alice.id, bob.id}  # reliés par l'inventaire partagé
+def test_proposer_suit_les_regles_des_recettes_du_jour(client, env, web, monkeypatch):
+    from app.services import daily
+
+    monkeypatch.setattr(daily, "queries_for_day", lambda day, count=2: ["poireau", "pommes"])
+    for i in range(3):
+        web.add("marmiton", f"test-gratin {i} poireaux", ["3 poireaux", "20 cl de crème fraîche"])
+    web.add("ptitchef", "test-tarte aux pommes", ["4 pommes"], category="Dessert")
+    env["plan"](1, ref=web.add("cuisineaz", "test-soupe deja prevue poireaux", ["2 poireaux"]).url)
+    days = [day(3), day(4)]
+    drafts = client.post("/api/agenda/suggest", json={"days": days, "slots": ["lunch", "dinner"]})
+    assert drafts.status_code == 200, drafts.text
+    chosen = [d["recipe"]["title"] for d in drafts.json() if d["recipe"]]
+    assert len(chosen) == 3 and len(chosen) == len(set(chosen))  # trois gratins pour quatre moments, sans répétition  # pas deux fois la même recette
+    assert "test-tarte aux pommes" not in chosen  # pas de dessert
+    assert "test-soupe deja prevue poireaux" not in chosen  # déjà au menu
+    assert all(d["reasons"] for d in drafts.json() if d["recipe"])
+    # Un moment déjà occupé n'est pas proposé.
+    env["plan"](3, slot="lunch")
+    again = client.post("/api/agenda/suggest", json={"days": [day(3)], "slots": ["lunch", "dinner"]}).json()
+    assert [d["slot"] for d in again] == ["dinner"]

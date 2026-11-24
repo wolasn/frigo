@@ -1,13 +1,10 @@
 """Préférences et gestion du compte (transaction annulée)."""
 
-from datetime import timedelta
-
 import pytest
 from sqlalchemy import select, update
 
 from app.api.deps import SESSION_COOKIE
-from app.clock import today
-from app.models import Food, FoodCategory, FoodShelfLife, Inventory, User
+from app.models import Food, FoodCategory, FoodShelfLife, SharedAgenda, User
 from app.models.enums import ReferenceUnit, StorageType, UserRole
 
 PASSWORD = "un-mot-de-passe-solide"
@@ -40,45 +37,28 @@ def foods(db_session):
 def test_valeurs_par_defaut_et_modification(client, as_user, foods):
     as_user("alice")
     prefs = client.get("/api/preferences").json()
-    assert (prefs["diet"], prefs["default_servings"], prefs["expiring_soon_days"]) == ("none", 2, 2)
-    assert {"food_id": str(foods["water"].id), "name": "Testeau", "removable": False} in prefs["basics"]
-
+    assert (prefs["diet"], prefs["default_servings"]) == ("none", 2)
+    assert prefs["tolerated_ingredients"] == ["eau", "sel", "huile d'olive", "poivre"] == prefs["default_tolerated_ingredients"]
     updated = client.patch("/api/preferences", json={"diet": "vegetarian", "default_servings": 6}).json()
-    assert (updated["diet"], updated["default_servings"], updated["expiring_soon_days"]) == ("vegetarian", 6, 2)
-    assert client.patch("/api/preferences", json={"default_servings": 1000}).status_code == 422
+    assert (updated["diet"], updated["default_servings"]) == ("vegetarian", 6)
+    assert {"expiring_soon_days", "thresholds", "basics"}.isdisjoint(updated)
 
 
-def test_seuil_par_categorie(client, as_user, foods):
+def test_ingredients_toleres(client, as_user):
     as_user("alice")
-    inventory = client.get("/api/inventories").json()[0]
-    fridge = next(l["id"] for l in inventory["locations"] if l["storage_type"] == "fridge")
-    client.post(f"/api/inventories/{inventory['id']}/items", json={
-        "food_id": str(foods["fish"].id), "quantity": 300, "unit": "g", "storage_location_id": fridge,
-        "expires_on": (today() + timedelta(days=4)).isoformat()})
-    status_of = lambda: client.get(f"/api/inventories/{inventory['id']}/items").json()["items"][0]["status"]
-    assert status_of() == "ok"  # seuil global : 2 jours
-
-    client.put(f"/api/preferences/thresholds/{foods['category'].id}", json={"days": 5})
-    assert status_of() == "soon"
-    assert client.get("/api/preferences").json()["thresholds"][0]["category_name"] == "Test poissons"
-    client.delete(f"/api/preferences/thresholds/{foods['category'].id}")
-    assert status_of() == "ok"
+    prefs = client.patch("/api/preferences", json={"tolerated_ingredients": ["eau", " sel ", "sel", "", "Beurre"]}).json()
+    assert prefs["tolerated_ingredients"] == ["eau", "sel", "Beurre"]  # sans doublons ni vides
+    assert client.patch("/api/preferences", json={"tolerated_ingredients": []}).json()["tolerated_ingredients"] == []
 
 
-def test_exclusions_et_basiques(client, as_user, foods):
+def test_exclusions(client, as_user, foods):
     as_user("alice")
     prefs = client.put(f"/api/preferences/exclusions/{foods['fish'].id}", json={"reason": "allergy"}).json()
     assert prefs["exclusions"] == [{"food_id": str(foods["fish"].id), "name": "Testmerlu", "reason": "allergy"}]
     prefs = client.put(f"/api/preferences/exclusions/{foods['fish'].id}", json={"reason": "dislike"}).json()
     assert prefs["exclusions"][0]["reason"] == "dislike"
     assert client.delete(f"/api/preferences/exclusions/{foods['fish'].id}").json()["exclusions"] == []
-
-    prefs = client.put(f"/api/preferences/basics/{foods['salt'].id}").json()
-    assert {"food_id": str(foods["salt"].id), "name": "Testsel", "removable": True} in prefs["basics"]
-    assert "Testsel" in [b["name"] for b in client.get("/api/basics").json()]
-    assert client.delete(f"/api/preferences/basics/{foods['water'].id}").status_code == 409
-    client.delete(f"/api/preferences/basics/{foods['salt'].id}")
-    assert "Testsel" not in [b["name"] for b in client.get("/api/basics").json()]
+    assert client.put(f"/api/preferences/exclusions/{foods['water'].id}", json={"reason": "dislike"}).status_code == 422
 
 
 def test_nom_et_mot_de_passe(client, as_user):
@@ -97,18 +77,12 @@ def test_nom_et_mot_de_passe(client, as_user):
     assert client.post("/api/auth/login", json={"username": "alice", "password": "nouveau-mot-de-passe"}).status_code == 200
 
 
-def test_suppression_de_compte_transmet_les_partages(client, as_user, db_session, foods):
+def test_suppression_de_compte_transmet_les_partages(client, as_user, db_session):
     as_user("alice")
     as_user("bob")
-    shared = client.post("/api/inventories", json={"name": "Coloc"}).json()
-    alone = client.post("/api/inventories", json={"name": "Solo"}).json()
-    client.post(f"/api/inventories/{shared['id']}/invitations", json={"username": "alice"})
-    category = client.get("/api/food-categories").json()[0]["id"]
-    private = client.post("/api/foods", json={"name": "Testconfiture de bob", "category_id": category, "reference_unit": "g"}).json()
-    fridge = next(l["id"] for i in client.get("/api/inventories").json() if i["id"] == shared["id"] for l in i["locations"]
-                  if l["storage_type"] == "fridge")
-    client.post(f"/api/inventories/{shared['id']}/items", json={
-        "food_id": private["id"], "quantity": 300, "unit": "g", "storage_location_id": fridge})
+    shared = client.post("/api/agendas", json={"name": "Coloc"}).json()
+    alone = client.post("/api/agendas", json={"name": "Solo"}).json()
+    client.post(f"/api/agendas/{shared['id']}/invitations", json={"username": "alice"})
     as_user("alice")
     client.post(f"/api/invitations/{client.get('/api/invitations').json()[0]['id']}/accept")
 
@@ -117,13 +91,11 @@ def test_suppression_de_compte_transmet_les_partages(client, as_user, db_session
     assert client.request("DELETE", "/api/auth/me", json={"password": PASSWORD}).status_code == 204
 
     assert db_session.scalar(select(User).where(User.username == "bob")) is None
-    assert db_session.get(Inventory, shared["id"]) is not None and db_session.get(Inventory, alone["id"]) is None
+    assert db_session.get(SharedAgenda, shared["id"]) is not None and db_session.get(SharedAgenda, alone["id"]) is None
     as_user("alice")
-    detail = client.get(f"/api/inventories/{shared['id']}").json()
+    detail = client.get(f"/api/agendas/{shared['id']}").json()
     assert detail["my_role"] == "admin" and [m["username"] for m in detail["members"]] == ["alice"]
     assert "maintenant administrateur" in client.get("/api/notifications").json()["items"][0]["message"]
-    items = client.get(f"/api/inventories/{shared['id']}/items").json()["items"]
-    assert [i["name"] for i in items] == ["Testconfiture de bob"]  # aliment transmis, article conservé
 
 
 def test_le_super_admin_ne_peut_pas_supprimer_son_compte(client, as_user, db_session):

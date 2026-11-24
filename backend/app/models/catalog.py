@@ -114,16 +114,3 @@ class UnitConversion(Base):
         ),
         Index("uq_unit_conversions_generic_unit", "from_unit", unique=True, postgresql_where=text("food_id IS NULL")),
     )
-
-
-class UserInfiniteFood(Base):
-    """Basiques infinis ajoutés par un utilisateur (l'eau est infinie pour tous via foods)."""
-
-    __tablename__ = "user_infinite_foods"
-
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
-    )
-    food_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("foods.id", ondelete="CASCADE"), primary_key=True
-    )

@@ -1,14 +1,13 @@
 """Ustensiles et recettes (Marmiton, IA, utilisateur), partages, avis et cache Marmiton."""
 
 import uuid
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
-    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -60,7 +59,7 @@ class Recipe(TimestampMixin, Base):
     status: Mapped[RecipeStatus] = mapped_column(
         pg_enum(RecipeStatus, "recipe_status"), nullable=False, server_default=RecipeStatus.DRAFT.value
     )
-    # Marmiton : vide. IA : qui l'a générée (simple trace, visible par tous). Utilisateur : l'auteur.
+    # Site web : vide. IA : qui l'a générée (simple trace). Utilisateur : l'auteur.
     # Les recettes d'un utilisateur sont supprimées par l'API avec son compte.
     author_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), index=True
@@ -69,6 +68,7 @@ class Recipe(TimestampMixin, Base):
         UUID(as_uuid=True), ForeignKey("recipes.id", ondelete="SET NULL")
     )
     external_url: Mapped[str | None] = mapped_column(Text, unique=True)
+    site: Mapped[str | None] = mapped_column(Text)  # marmiton, cuisineaz, ptitchef (recettes web)
     servings: Mapped[int] = mapped_column(Integer, nullable=False)
     prep_minutes: Mapped[int | None] = mapped_column(Integer)
     cook_minutes: Mapped[int | None] = mapped_column(Integer)
@@ -78,7 +78,7 @@ class Recipe(TimestampMixin, Base):
     is_vegetarian: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     health_score: Mapped[Decimal | None] = mapped_column(Numeric(3, 1))
     nutrition_per_serving: Mapped[Any | None] = mapped_column(JSONB)
-    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # cache Marmiton
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # lue sur le site
 
     __table_args__ = (
         CheckConstraint("servings BETWEEN 1 AND 999", name="servings_range"),
@@ -86,8 +86,8 @@ class Recipe(TimestampMixin, Base):
         CheckConstraint("NOT is_vegan OR is_vegetarian", name="vegan_implies_vegetarian"),
         CheckConstraint("status = 'draft' OR difficulty IS NOT NULL", name="complete_has_difficulty"),
         CheckConstraint(
-            "source <> 'marmiton' OR (status = 'complete' AND external_url IS NOT NULL)",
-            name="marmiton_is_complete",
+            "source <> 'web' OR (status = 'complete' AND external_url IS NOT NULL AND site IS NOT NULL)",
+            name="web_is_complete",
         ),
         CheckConstraint(
             "(prep_minutes IS NULL OR prep_minutes >= 0) AND (cook_minutes IS NULL OR cook_minutes >= 0)",
@@ -159,15 +159,15 @@ class RecipeShare(Base):
     shared_with_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
-    shared_with_inventory_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("inventories.id", ondelete="CASCADE"), index=True
+    shared_with_agenda_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("shared_agendas.id", ondelete="CASCADE"), index=True
     )
     shared_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     shared_at: Mapped[datetime] = created_at_column()
 
     __table_args__ = (
         CheckConstraint(
-            "(shared_with_user_id IS NULL) <> (shared_with_inventory_id IS NULL)", name="one_recipient"
+            "(shared_with_user_id IS NULL) <> (shared_with_agenda_id IS NULL)", name="one_recipient"
         ),
         Index(
             "uq_recipe_shares_user",
@@ -175,9 +175,9 @@ class RecipeShare(Base):
             unique=True, postgresql_where=text("shared_with_user_id IS NOT NULL"),
         ),
         Index(
-            "uq_recipe_shares_inventory",
-            "recipe_id", "shared_with_inventory_id",
-            unique=True, postgresql_where=text("shared_with_inventory_id IS NOT NULL"),
+            "uq_recipe_shares_agenda",
+            "recipe_id", "shared_with_agenda_id",
+            unique=True, postgresql_where=text("shared_with_agenda_id IS NOT NULL"),
         ),
     )
 
@@ -197,24 +197,39 @@ class UserRecipeMeta(Base):
     comment: Mapped[str | None] = mapped_column(Text)
     is_favorite: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     is_pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
-    times_cooked: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    last_cooked_on: Mapped[date | None] = mapped_column(Date)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
     __table_args__ = (
         CheckConstraint("rating IS NULL OR rating BETWEEN 1 AND 5", name="rating_range"),
-        CheckConstraint("times_cooked >= 0", name="times_cooked_positive"),
         CheckConstraint(
             "NOT is_pinned OR (comment IS NOT NULL AND length(btrim(comment)) > 0)", name="pinned_needs_comment"
         ),
     )
 
 
-class MarmitonSearchCache(Base):
-    __tablename__ = "marmiton_search_cache"
+class WebSearchCache(Base):
+    """Adresses des recettes trouvées par une recherche sur un site, réutilisées 7 jours."""
 
+    __tablename__ = "web_search_cache"
+
+    site: Mapped[str] = mapped_column(Text, primary_key=True)
     query_normalized: Mapped[str] = mapped_column(Text, primary_key=True)
-    recipe_ids: Mapped[list[uuid.UUID]] = mapped_column(ARRAY(UUID(as_uuid=True)), nullable=False)
+    urls: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class IngredientTerm(Base):
+    """Ingrédients proposés à cocher pour chercher des recettes : noms vus dans les recettes des sites."""
+
+    __tablename__ = "ingredient_terms"
+
+    name: Mapped[str] = mapped_column(Text, primary_key=True)
+    food_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("foods.id", ondelete="SET NULL"), index=True
+    )
+    uses: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")  # recettes où il apparaît
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )

@@ -1,42 +1,44 @@
-"""Recettes du jour : trois idées par jour et par utilisateur, de saison et différentes des jours précédents.
+"""Recettes du jour et propositions de l'agenda : une seule logique.
 
-Chaque matin, deux recherches Marmiton de saison (en cache 7 jours, communes à tous) apportent des recettes
-nouvelles ; puis, pour chaque utilisateur, toutes les recettes qu'il voit sont classées : produits de saison,
-aliments qui périment bientôt, peu d'achats, ses notes et le score santé. Sont écartées les recettes déjà
-proposées ces deux dernières semaines, cuisinées récemment ou déjà prévues à l'agenda, et celles que son
-régime, ses allergies ou ses ustensiles excluent. L'IA n'invente une recette qu'en dernier recours.
+Un vivier de recettes de saison (recherches sur les sites qui changent chaque jour, plus les recettes du
+compte : créées, épinglées, en favori), filtré puis classé :
+- écartées : recettes proposées ces 14 derniers jours, déjà au menu (14 derniers jours, 7 prochains),
+  desserts, boissons et préparations de base, et ce que le régime, les allergies ou les ustensiles excluent ;
+- classées : produits de saison, hors saison pénalisés, notes (du compte, ou du site), score santé ;
+- variées : pas deux recettes autour du même produit de saison le même jour.
+Les recettes web ne sont pas mises en base : on garde leur adresse et un instantané de leur carte.
+L'IA n'invente une recette du jour qu'en dernier recours.
 """
 
 import logging
 import random
 import re
 import unicodedata
-import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.clock import APP_TIMEZONE, today
-from app.models import DailyRecipe, Food, InventoryMember, PlannedMeal, Recipe, User, UserPreferences, UserRecipeMeta
-from app.models.enums import Diet, RecipeSource
+from app.models import AgendaMember, DailyRecipe, Food, PlannedMeal, Recipe, User, UserRecipeMeta
+from app.models.enums import MealSlot, RecipeSource
 from app.services import season
-from app.services.marmiton import MarmitonError, cached_search, normalize_query
-from app.services.proposals import Evaluation, Options, default_inventory_ids, propose
-from app.services.recipes import search_marmiton
+from app.services.balance import MealFacts, WeekState, draft_value, facts_for_drafts, is_dessert, recipe_facts_many
+from app.services.evaluation import Evaluation, accepted, default_filters, evaluate_all
+from app.services.recipes import Draft, load_drafts, visible_recipes_clause
+from app.services.search import memory, web_drafts
+from app.services.sources import SITES
 
 logger = logging.getLogger("frigo.daily")
 
 PICKS = 3
-NO_REPEAT_DAYS = 14  # une recette du jour ne revient pas avant deux semaines
-COOKED_RECENTLY_DAYS = 10
-PLANNED_WINDOW_DAYS = 7  # déjà prévue à l'agenda dans la semaine passée ou à venir
-MARMITON_QUERIES = 2
-MARMITON_NEW = 4  # recettes nouvelles importées au plus par recherche
+NO_REPEAT_DAYS = 14  # une recette proposée ou au menu ne revient pas avant deux semaines
+PLANNED_AHEAD_DAYS = 7  # déjà au menu dans la semaine qui vient
+DAILY_QUERIES = 2
 ACTIVE_DAYS = 30  # comptes sans connexion depuis plus longtemps : rien n'est préparé d'avance
-
+NOT_A_MEAL_CATEGORY = re.compile(r"ap[ée]ritif|sauce|boisson|cocktail|confiserie|condiment|p[aâ]te\b", re.IGNORECASE)
 
 _NOT_A_MEAL = re.compile(
     r"\b(gateaux?(?! de )|tartes? (aux?|a la|au) (pommes?|poires?|fraises?|abricots?|cerises?|figues?|prunes?|framboises?|myrtilles?"
@@ -50,10 +52,20 @@ _NOT_A_MEAL = re.compile(
 
 
 def looks_like_a_meal(title: str) -> bool:
-    """Pas de dessert, de boisson ni de préparation de base parmi les recettes du jour (Marmiton ne nous donne
-    pas le type de plat) : repéré au titre."""
+    """Pas de dessert, de boisson ni de préparation de base, repéré au titre."""
     text = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode().lower()
     return _NOT_A_MEAL.search(text.replace("pommes de terre", "").replace("pomme de terre", "")) is None
+
+
+def is_meal(draft: Draft) -> bool:
+    if draft.category and NOT_A_MEAL_CATEGORY.search(draft.category):
+        return False
+    return looks_like_a_meal(draft.recipe.title) and not is_dessert(draft.recipe, draft.category)
+
+
+def key(draft: Draft) -> str:
+    """Identité d'une recette d'un passage à l'autre : son adresse web, ou son id en base."""
+    return draft.recipe.external_url or draft.ref
 
 
 @dataclass
@@ -61,176 +73,214 @@ class Pick:
     evaluation: Evaluation
     score: float
     seasonal: list[str] = field(default_factory=list)
-    origin: str = "base"
-    query: str | None = None
+
+    @property
+    def draft(self) -> Draft:
+        return self.evaluation.draft
+
+    @property
+    def origin(self) -> str:
+        return "base" if self.draft.in_db else ("ia" if self.draft.recipe.source == RecipeSource.AI else "web")
 
 
-def queries_of_the_day(day) -> list[str]:
-    """Deux recherches de saison, qui tournent d'un jour à l'autre."""
+# ---------- Vivier ----------
+
+
+def queries_for_day(day: date, count: int = DAILY_QUERIES) -> list[str]:
+    """Recherches de saison, qui tournent d'un jour à l'autre."""
     pool = season.search_pool(day)
-    start = (day.toordinal() * MARMITON_QUERIES) % len(pool)
-    return [pool[(start + i) % len(pool)] for i in range(min(MARMITON_QUERIES, len(pool)))]
+    start = (day.toordinal() * DAILY_QUERIES) % len(pool)
+    return [pool[(start + i) % len(pool)] for i in range(min(count, len(pool)))]
 
 
-def search_season(session: Session, day, network: bool = True) -> dict[uuid.UUID, str]:
-    """Recettes apportées par les recherches de saison du jour : {recette: recherche}.
-    Sans réseau, seules les recherches déjà en cache comptent."""
-    found: dict[uuid.UUID, str] = {}
-    for query in queries_of_the_day(day):
-        try:
-            ids = search_marmiton(session, query, limit=MARMITON_NEW) if network else cached_search(session, query)
-        except MarmitonError as error:
-            logger.warning("Recherche de saison « %s » impossible : %s", query, error)
-            session.rollback()
-            continue
-        for recipe_id in ids or []:
-            found.setdefault(recipe_id, normalize_query(query))
-    return found
+def account_drafts(session: Session, user: User) -> list[Draft]:
+    """Recettes du compte : créées (les siennes et celles qu'on lui partage), épinglées ou en favori."""
+    kept = select(UserRecipeMeta.recipe_id).where(
+        UserRecipeMeta.user_id == user.id, UserRecipeMeta.is_favorite | UserRecipeMeta.is_pinned)
+    recipes = list(session.scalars(select(Recipe).where(
+        visible_recipes_clause(user), or_(Recipe.source == RecipeSource.USER, Recipe.id.in_(kept)))))
+    return load_drafts(session, recipes)
 
 
-def _excluded(session: Session, user: User, day) -> set[uuid.UUID]:
-    recent = set(session.scalars(select(DailyRecipe.recipe_id).where(
+def pool(session: Session, user: User, day: date, queries: int = DAILY_QUERIES, client=None) -> list[Draft]:
+    drafts, _ = web_drafts(session, queries_for_day(day, queries), client=client)
+    seen = {key(d) for d in drafts}
+    return drafts + [d for d in account_drafts(session, user) if key(d) not in seen]
+
+
+def recent_keys(session: Session, user: User, day: date) -> set[str]:
+    """Recettes proposées ces 14 derniers jours, ou au menu (agenda personnel et partagés) autour de ce jour."""
+    keys = set(session.scalars(select(DailyRecipe.recipe_ref).where(
         DailyRecipe.user_id == user.id, DailyRecipe.day >= day - timedelta(days=NO_REPEAT_DAYS), DailyRecipe.day < day)))
-    cooked = set(session.scalars(select(UserRecipeMeta.recipe_id).where(
-        UserRecipeMeta.user_id == user.id, UserRecipeMeta.last_cooked_on >= day - timedelta(days=COOKED_RECENTLY_DAYS))))
-    shared = select(InventoryMember.inventory_id).where(InventoryMember.user_id == user.id)
-    planned = set(session.scalars(select(PlannedMeal.recipe_id).where(
-        PlannedMeal.recipe_id.is_not(None),
-        PlannedMeal.meal_date.between(day - timedelta(days=PLANNED_WINDOW_DAYS), day + timedelta(days=PLANNED_WINDOW_DAYS)),
-        or_(PlannedMeal.user_id == user.id, PlannedMeal.shared_inventory_id.in_(shared)),
-    )))
-    return recent | cooked | planned
+    shared = select(AgendaMember.agenda_id).where(AgendaMember.user_id == user.id)
+    for recipe_id, url in session.execute(
+        select(Recipe.id, Recipe.external_url).join(PlannedMeal, PlannedMeal.recipe_id == Recipe.id).where(
+            PlannedMeal.meal_date.between(day - timedelta(days=NO_REPEAT_DAYS), day + timedelta(days=PLANNED_AHEAD_DAYS)),
+            or_((PlannedMeal.user_id == user.id) & PlannedMeal.shared_agenda_id.is_(None),
+                PlannedMeal.shared_agenda_id.in_(shared)))
+    ):
+        keys.add(url or str(recipe_id))
+    return keys
 
 
-def _food_ids(session: Session, names: list[str]) -> dict[uuid.UUID, str]:
+def _food_names(session: Session, names: list[str]) -> dict:
     if not names:
         return {}
     return dict(session.execute(select(Food.id, Food.name).where(Food.name.in_(names), Food.owner_user_id.is_(None))).all())
 
 
-def _options(session: Session, user: User, day) -> Options:
-    preferences = session.get(UserPreferences, user.id)
-    return Options(
-        servings=preferences.default_servings if preferences else 2, date=day,
-        inventory_ids=default_inventory_ids(session, user), max_purchases=None,
-        diet=preferences.diet if preferences else Diet.NONE,
-    )
-
-
-def rank(session: Session, user: User, day, fresh: dict[uuid.UUID, str] | None = None) -> list[Pick]:
-    """Les meilleures recettes du jour pour cet utilisateur, déjà variées entre elles (au plus PICKS)."""
-    fresh = fresh or {}
-    seasonal = _food_ids(session, season.in_season(day, fruits=False))
-    off_season = set(_food_ids(session, season.out_of_season(day)))
-    excluded = _excluded(session, user, day)
+def candidates(session: Session, user: User, day: date, drafts: list[Draft], excluded: set[str] | None = None,
+               servings: int | None = None) -> list[Pick]:
+    """Recettes acceptables ce jour-là pour ce compte, les mieux classées d'abord."""
+    filters = default_filters(session, user, servings=servings)
+    seasonal = _food_names(session, season.in_season(day, fruits=False))
+    off_season = set(_food_names(session, season.out_of_season(day)))
+    excluded = recent_keys(session, user, day) if excluded is None else excluded
     rng = random.Random(f"{user.id}:{day.isoformat()}")  # même tirage toute la journée
-
-    candidates: list[Pick] = []
-    for evaluation in propose(session, user, _options(session, user, day), limit=10**6):
-        recipe = evaluation.recipe
-        if recipe.id in excluded or not looks_like_a_meal(recipe.title):
+    picks = []
+    for e in evaluate_all(session, user, [d for d in drafts if is_meal(d) and key(d) not in excluded], filters):
+        if not accepted(e, filters):
             continue
-        foods = {i.food_id for i in evaluation.ingredients if i.food_id and i.status != "infinite"}
-        hits = [seasonal[f] for f in foods if f in seasonal]
-        rating = evaluation.meta.rating if evaluation.meta and evaluation.meta.rating else 3
+        foods = {i.food_id for i in e.ingredients if i.food_id}
+        hits = sorted({seasonal[f] for f in foods if f in seasonal})
+        rating = e.meta.rating if e.meta and e.meta.rating else None
+        site_rating = e.draft.rating
         score = (
             3 * min(len(hits), 3)
             - 2 * len(foods & off_season)
-            + 3 * len(evaluation.expiring_used)
-            - 0.75 * min(evaluation.missing_count, 8)
-            - 4 * len(evaluation.disliked)
-            + (rating - 3)
-            + 0.3 * float(recipe.health_score or 0)
-            + (1 if recipe.id in fresh else 0)  # une nouveauté du jour passe devant à égalité
+            - 4 * len(e.disliked)
+            + ((rating - 3) if rating else 0)
+            + ((site_rating - 4) * 1.5 if site_rating and not rating else 0)
+            + 0.3 * float(e.recipe.health_score or 0)
             + rng.uniform(0, 2)
         )
-        candidates.append(Pick(evaluation, score, sorted(hits), "marmiton" if recipe.id in fresh else "base",
-                               fresh.get(recipe.id)))
-
-    picks: list[Pick] = []
-    while candidates and len(picks) < PICKS:
-        # Variété : chaque produit de saison déjà au menu du jour rend les autres recettes qui l'utilisent moins prioritaires.
-        used = {name for p in picks for name in p.seasonal}
-        best = max(candidates, key=lambda p: p.score - 2.5 * len(used & set(p.seasonal)))
-        candidates.remove(best)
-        picks.append(best)
+        picks.append(Pick(e, score, hits))
+    picks.sort(key=lambda p: -p.score)
     return picks
 
 
-def _ai_recipes(session: Session, user: User, day, count: int, avoid: list[str]) -> list[Recipe]:
-    """Dernier recours : l'IA invente les recettes qui manquent, de saison."""
-    from app.api.recipes import AI_DAILY_LIMIT, GenerateIn, _generation_request
+def diverse(picks: list[Pick], count: int, used_products: set[str] | None = None) -> list[Pick]:
+    """Les meilleures, en évitant de reprendre le même produit de saison, et en variant les sites."""
+    left, chosen = list(picks), []
+    used = set(used_products or ())
+    sites: list[str | None] = []
+    while left and len(chosen) < count:
+        best = max(left, key=lambda p: p.score - 2.5 * len(used & set(p.seasonal)) - 1.5 * sites.count(p.draft.recipe.site))
+        left.remove(best)
+        chosen.append(best)
+        used |= set(best.seasonal)
+        sites.append(best.draft.recipe.site)
+    return chosen
+
+
+# ---------- Présentation ----------
+
+
+def snapshot(draft: Draft) -> dict:
+    """Ce qu'il faut pour afficher la carte d'une recette sans la relire sur le site."""
+    r = draft.recipe
+    return {
+        "title": r.title, "image_url": r.image_url, "prep_minutes": r.prep_minutes, "cook_minutes": r.cook_minutes,
+        "difficulty": r.difficulty.value if r.difficulty else None, "source": r.source.value, "site": r.site,
+        "external_url": r.external_url, "servings": r.servings, "is_vegetarian": bool(r.is_vegetarian),
+        "is_vegan": bool(r.is_vegan), "health_score": float(r.health_score) if r.health_score is not None else None,
+        "rating": draft.rating,
+    }
+
+
+def reasons(pick: Pick) -> list[str]:
+    out = []
+    if pick.seasonal:
+        out.append("De saison : " + ", ".join(h.lower() for h in pick.seasonal[:3]))
+    meta = pick.evaluation.meta
+    if meta and meta.is_favorite:
+        out.append("Un de tes favoris")
+    elif meta and meta.rating:
+        out.append(f"Tu l'as notée {meta.rating}/5")
+    elif pick.draft.rating:
+        out.append(f"Noté {str(pick.draft.rating).replace('.', ',')}/5 sur {SITES[pick.draft.recipe.site].label}"
+                   if pick.draft.recipe.site in SITES else f"Noté {pick.draft.rating}/5")
+    if pick.origin == "base" and pick.draft.recipe.source == RecipeSource.USER:
+        out.append("Recette maison")
+    elif pick.origin == "ia":
+        out.append("Inventée par l'IA")
+    return out
+
+
+# ---------- Recettes du jour ----------
+
+
+def _ai_drafts(session: Session, user: User, day: date, count: int, avoid: list[str]) -> list[Draft]:
+    """Dernier recours : l'IA invente les recettes qui manquent, de saison (gardées en mémoire)."""
+    from app.services.ai_usage import AI_DAILY_CALLS, ai_calls_today
     from app.services.ai_alerts import alert_admin
-    from app.services.ai_recipes import AiError
-    from app.services.ai_recipes import generate as ai_generate
+    from app.services.ai_recipes import AiError, generate, request_for
     from app.services.ai_usage import recorder
     from app.services.ingredients import FoodMatcher
-    from app.services.recipes import build_ai_recipe
+    from app.services.recipes import build_ai_draft, standard_utensils
 
-    start_of_day = datetime.combine(day, datetime.min.time(), tzinfo=APP_TIMEZONE)
-    done = session.scalar(select(func.count()).select_from(Recipe).where(
-        Recipe.source == RecipeSource.AI, Recipe.author_user_id == user.id, Recipe.created_at >= start_of_day))
-    count = min(count, AI_DAILY_LIMIT - done)
-    if count <= 0:
+    if ai_calls_today(session, user) >= AI_DAILY_CALLS:
         return []
     produce = ", ".join(n.split("(")[0].strip().lower() for n in season.in_season(day, fruits=False)[:6])
     wish = f"Plat de saison ({season.MONTH_NAMES[day.month - 1]}) : {produce}."
     if avoid:
         wish += " Différent de : " + ", ".join(avoid)
     try:
-        generated = ai_generate(_generation_request(session, user, GenerateIn(count=count, max_purchases=None, wish=wish[:200])),
-                                on_usage=recorder(session, user, "recipe"))
+        generated = generate(request_for(session, user, count, [], wish=wish[:200]), on_usage=recorder(session, user, "recipe"))
     except AiError as error:
         session.commit()  # le coût d'un appel facturé mais inutilisable est gardé
         if error.needs_admin:
             alert_admin(session, error)
         logger.warning("Recettes du jour : IA indisponible pour %s : %s", user.username, error)
         return []
-    matcher = FoodMatcher(session)
-    return [build_ai_recipe(session, recipe, user, matcher) for recipe in generated]
+    session.commit()
+    matcher, utensils = FoodMatcher(session), standard_utensils(session)
+    drafts = [build_ai_draft(g, user, matcher, utensils) for g in generated]
+    for draft in drafts:
+        memory.put(draft)
+    return drafts
 
 
-def choose(session: Session, user: User, day, fresh: dict[uuid.UUID, str] | None = None,
-           allow_ai: bool = False) -> list[DailyRecipe]:
-    picks = rank(session, user, day, fresh)
-    rows = [DailyRecipe(user_id=user.id, day=day, position=i, recipe_id=p.evaluation.recipe.id, origin=p.origin,
-                        query=p.query) for i, p in enumerate(picks)]
+def choose(session: Session, user: User, day: date, drafts: list[Draft] | None = None, allow_ai: bool = False,
+           client=None) -> list[DailyRecipe]:
+    drafts = pool(session, user, day, client=client) if drafts is None else drafts
+    picks = diverse(candidates(session, user, day, drafts), PICKS)
+    rows = [DailyRecipe(user_id=user.id, day=day, position=i, recipe_ref=key(p.draft), snapshot=snapshot(p.draft),
+                        origin=p.origin) for i, p in enumerate(picks)]
     if len(rows) < PICKS and allow_ai:
-        avoid = [p.evaluation.recipe.title for p in picks]
-        for recipe in _ai_recipes(session, user, day, PICKS - len(rows), avoid):
-            rows.append(DailyRecipe(user_id=user.id, day=day, position=len(rows), recipe_id=recipe.id, origin="ia"))
+        for draft in _ai_drafts(session, user, day, PICKS - len(rows), [p.draft.recipe.title for p in picks]):
+            rows.append(DailyRecipe(user_id=user.id, day=day, position=len(rows), recipe_ref=draft.ref,
+                                    snapshot=snapshot(draft), origin="ia"))
     session.add_all(rows)
     try:
         session.commit()
-    except IntegrityError:  # préparées au même moment par la tâche du matin
+    except IntegrityError:  # préparées au même moment ailleurs
         session.rollback()
         return stored(session, user, day)
     return rows
 
 
-def stored(session: Session, user: User, day) -> list[DailyRecipe]:
+def stored(session: Session, user: User, day: date) -> list[DailyRecipe]:
     return list(session.scalars(select(DailyRecipe).where(DailyRecipe.user_id == user.id, DailyRecipe.day == day)
                                 .order_by(DailyRecipe.position)))
 
 
 def todays(session: Session, user: User) -> list[DailyRecipe]:
-    """Recettes du jour, préparées à l'ouverture si la tâche du matin ne l'a pas fait (nouveau compte…) :
-    sans appel réseau ni IA, pour répondre vite."""
+    """Recettes du jour, préparées à l'ouverture si la tâche du matin ne l'a pas fait (nouveau compte…)."""
     day = today()
-    return stored(session, user, day) or choose(session, user, day, search_season(session, day, network=False))
+    return stored(session, user, day) or choose(session, user, day)
 
 
 def run_daily(session: Session) -> int:
-    """Tâche du matin. Renvoie le nombre d'utilisateurs servis."""
+    """Tâche du matin. Renvoie le nombre de comptes servis."""
     day = today()
-    fresh = search_season(session, day)
     since = datetime.now(APP_TIMEZONE) - timedelta(days=ACTIVE_DAYS)
     done = 0
     for user in session.scalars(select(User).where(User.last_login_at >= since)).all():
         if stored(session, user, day):
             continue
         try:
-            choose(session, user, day, fresh, allow_ai=True)
+            choose(session, user, day, allow_ai=True)
             done += 1
         except Exception:  # noqa: BLE001 - un compte en erreur ne bloque pas les autres
             session.rollback()
@@ -238,19 +288,52 @@ def run_daily(session: Session) -> int:
     return done
 
 
-def reasons(pick_evaluation: Evaluation, day, origin: str) -> list[str]:
-    """Pourquoi cette recette aujourd'hui, en quelques mots."""
-    seasonal = set(season.in_season(day, fruits=False))
-    hits = sorted({i.name for i in pick_evaluation.ingredients if i.name in seasonal})
-    out: list[str] = []
-    if hits:
-        out.append("De saison : " + ", ".join(h.lower() for h in hits[:3]))
-    if pick_evaluation.expiring_used:
-        out.append("Utilise " + ", ".join(n.lower() for n in pick_evaluation.expiring_used[:2]) + " (bientôt périmé)")
-    n = pick_evaluation.missing_count
-    out.append("Rien à acheter" if n == 0 else f"{n} ingrédient{'s' if n > 1 else ''} à acheter")
-    if origin == "marmiton":
-        out.append("Nouvelle sur Marmiton")
-    elif origin == "ia":
-        out.append("Inventée par l'IA")
+# ---------- Propositions de l'agenda ----------
+
+
+@dataclass
+class SlotProposal:
+    meal_date: date
+    slot: MealSlot
+    pick: Pick | None
+    reasons: list[str]
+
+
+def propose_slots(session: Session, user: User, slots: list[tuple[date, MealSlot]], week_meals: list[PlannedMeal],
+                  servings: int | None = None, exclude: set[str] | None = None, client=None) -> list[SlotProposal]:
+    """Une recette par créneau, avec les règles des recettes du jour, en équilibrant la semaine."""
+    if not slots:
+        return []
+    first = min(d for d, _ in slots)
+    drafts = pool(session, user, first, queries=min(6, DAILY_QUERIES + len(slots) // 3), client=client)
+    excluded = recent_keys(session, user, first) | set(exclude or ())
+    picks = candidates(session, user, first, drafts, excluded, servings)
+    facts = facts_for_drafts(session, [p.draft for p in picks])
+
+    state = WeekState()
+    week_recipes = [r for r in session.scalars(select(Recipe).where(Recipe.id.in_({m.recipe_id for m in week_meals})))]
+    week_facts: dict = recipe_facts_many(session, week_recipes)
+    for recipe in week_recipes:
+        state.add(recipe.external_url or str(recipe.id), week_facts.get(recipe.id))
+    products_by_day: dict[date, set[str]] = {}
+
+    out = []
+    for day, slot in slots:
+        used_today = products_by_day.setdefault(day, set())
+        best = None
+        for pick in picks:
+            if key(pick.draft) in state.used:
+                continue
+            value, why = draft_value(pick.evaluation, facts.get(pick.draft.ref) or MealFacts(), state)
+            total = pick.score + value - 3 * len(used_today & set(pick.seasonal))
+            if best is None or total > best[0]:
+                best = (total, pick, why)
+        if best is None:
+            out.append(SlotProposal(day, slot, None, ["Aucune autre recette ne convient."]))
+            continue
+        _, pick, why = best
+        state.add(key(pick.draft), facts.get(pick.draft.ref))
+        used_today |= set(pick.seasonal)
+        out.append(SlotProposal(day, slot, pick, reasons(pick) + [r for r in why if not r.startswith("Score")]))
     return out
+

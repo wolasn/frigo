@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, Text, func, text
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, created_at_column, pg_enum, uuid_pk
@@ -57,31 +57,17 @@ class UserPreferences(Base):
     )
     diet: Mapped[Diet] = mapped_column(pg_enum(Diet, "diet"), nullable=False, server_default=Diet.NONE.value)
     default_servings: Mapped[int] = mapped_column(Integer, nullable=False, server_default="2")
-    expiring_soon_days: Mapped[int] = mapped_column(Integer, nullable=False, server_default="2")
+    # Ingrédients qui ne comptent pas avec « uniquement les ingrédients cochés ».
+    tolerated_ingredients: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default=text("ARRAY['eau', 'sel', 'huile d''olive', 'poivre']")
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
     __table_args__ = (
         CheckConstraint("default_servings BETWEEN 1 AND 999", name="default_servings_range"),
-        CheckConstraint("expiring_soon_days >= 0", name="expiring_soon_days_positive"),
     )
-
-
-class UserCategoryThreshold(Base):
-    """Seuil « expire bientôt » propre à une catégorie d'aliments."""
-
-    __tablename__ = "user_category_thresholds"
-
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
-    )
-    category_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("food_categories.id", ondelete="CASCADE"), primary_key=True
-    )
-    days: Mapped[int] = mapped_column(Integer, nullable=False)
-
-    __table_args__ = (CheckConstraint("days >= 0", name="days_positive"),)
 
 
 class UserExcludedFood(Base):

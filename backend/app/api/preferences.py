@@ -1,4 +1,4 @@
-"""Préférences : régime et personnes par défaut, seuils d'alerte, exclusions, basiques infinis."""
+"""Préférences : régime et personnes par défaut, exclusions, ingrédients toujours tolérés."""
 
 import uuid
 
@@ -8,24 +8,12 @@ from sqlalchemy import delete, select
 
 from app.api.catalog import visible_foods
 from app.api.deps import CurrentUser, DbSession
-from app.models import (
-    Food,
-    FoodCategory,
-    UserCategoryThreshold,
-    UserExcludedFood,
-    UserInfiniteFood,
-    UserPreferences,
-)
+from app.models import Food, UserExcludedFood, UserPreferences
 from app.models.enums import Diet, ExclusionReason
-from app.services.planning import recompute_reservations, scope_of
 
 router = APIRouter(prefix="/api/preferences", tags=["préférences"])
 
-
-class Threshold(BaseModel):
-    category_id: uuid.UUID
-    category_name: str
-    days: int
+DEFAULT_TOLERATED = ["eau", "sel", "huile d'olive", "poivre"]
 
 
 class Exclusion(BaseModel):
@@ -34,29 +22,19 @@ class Exclusion(BaseModel):
     reason: ExclusionReason
 
 
-class Basic(BaseModel):
-    food_id: uuid.UUID
-    name: str
-    removable: bool
-
-
 class PreferencesOut(BaseModel):
     diet: Diet
     default_servings: int
-    expiring_soon_days: int
-    thresholds: list[Threshold]
     exclusions: list[Exclusion]
-    basics: list[Basic]
+    # Ne comptent pas avec « uniquement les ingrédients cochés ».
+    tolerated_ingredients: list[str]
+    default_tolerated_ingredients: list[str] = DEFAULT_TOLERATED
 
 
 class PreferencesIn(BaseModel):
     diet: Diet | None = None
     default_servings: int | None = Field(default=None, ge=1, le=999)
-    expiring_soon_days: int | None = Field(default=None, ge=0, le=60)
-
-
-class DaysIn(BaseModel):
-    days: int = Field(ge=0, le=60)
+    tolerated_ingredients: list[str] | None = Field(default=None, max_length=40)
 
 
 class ReasonIn(BaseModel):
@@ -82,33 +60,14 @@ def _visible_food(session, user, food_id: uuid.UUID) -> Food:
 
 def _out(session, user) -> PreferencesOut:
     preferences = _preferences(session, user)
-    thresholds = session.execute(
-        select(UserCategoryThreshold, FoodCategory.name)
-        .join(FoodCategory, FoodCategory.id == UserCategoryThreshold.category_id)
-        .where(UserCategoryThreshold.user_id == user.id)
-        .order_by(FoodCategory.name)
-    ).all()
     exclusions = session.execute(
-        select(UserExcludedFood, Food.name)
-        .join(Food, Food.id == UserExcludedFood.food_id)
-        .where(UserExcludedFood.user_id == user.id)
-        .order_by(Food.name)
-    ).all()
-    always = session.execute(select(Food.id, Food.name).where(Food.is_always_infinite.is_(True))).all()
-    mine = session.execute(
-        select(Food.id, Food.name)
-        .join(UserInfiniteFood, UserInfiniteFood.food_id == Food.id)
-        .where(UserInfiniteFood.user_id == user.id)
-        .order_by(Food.name)
+        select(UserExcludedFood, Food.name).join(Food, Food.id == UserExcludedFood.food_id)
+        .where(UserExcludedFood.user_id == user.id).order_by(Food.name)
     ).all()
     return PreferencesOut(
-        diet=preferences.diet,
-        default_servings=preferences.default_servings,
-        expiring_soon_days=preferences.expiring_soon_days,
-        thresholds=[Threshold(category_id=t.category_id, category_name=name, days=t.days) for t, name in thresholds],
+        diet=preferences.diet, default_servings=preferences.default_servings,
         exclusions=[Exclusion(food_id=e.food_id, name=name, reason=e.reason) for e, name in exclusions],
-        basics=[Basic(food_id=i, name=n, removable=False) for i, n in always]
-        + [Basic(food_id=i, name=n, removable=True) for i, n in mine],
+        tolerated_ingredients=list(preferences.tolerated_ingredients),
     )
 
 
@@ -124,29 +83,11 @@ def update_preferences(body: PreferencesIn, session: DbSession, user: CurrentUse
     preferences = _preferences(session, user)
     for name in body.model_fields_set:
         value = getattr(body, name)
-        if value is not None:
-            setattr(preferences, name, value)
-    session.commit()
-    return _out(session, user)
-
-
-@router.put("/thresholds/{category_id}")
-def set_threshold(category_id: uuid.UUID, body: DaysIn, session: DbSession, user: CurrentUser) -> PreferencesOut:
-    if session.get(FoodCategory, category_id) is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Catégorie introuvable.")
-    threshold = session.get(UserCategoryThreshold, (user.id, category_id))
-    if threshold is None:
-        session.add(UserCategoryThreshold(user_id=user.id, category_id=category_id, days=body.days))
-    else:
-        threshold.days = body.days
-    session.commit()
-    return _out(session, user)
-
-
-@router.delete("/thresholds/{category_id}")
-def remove_threshold(category_id: uuid.UUID, session: DbSession, user: CurrentUser) -> PreferencesOut:
-    session.execute(delete(UserCategoryThreshold).where(
-        UserCategoryThreshold.user_id == user.id, UserCategoryThreshold.category_id == category_id))
+        if value is None:
+            continue
+        if name == "tolerated_ingredients":
+            value = list(dict.fromkeys(v.strip()[:60] for v in value if v.strip()))  # sans doublons ni vides
+        setattr(preferences, name, value)
     session.commit()
     return _out(session, user)
 
@@ -168,29 +109,5 @@ def set_exclusion(food_id: uuid.UUID, body: ReasonIn, session: DbSession, user: 
 @router.delete("/exclusions/{food_id}")
 def remove_exclusion(food_id: uuid.UUID, session: DbSession, user: CurrentUser) -> PreferencesOut:
     session.execute(delete(UserExcludedFood).where(UserExcludedFood.user_id == user.id, UserExcludedFood.food_id == food_id))
-    session.commit()
-    return _out(session, user)
-
-
-@router.put("/basics/{food_id}")
-def add_basic(food_id: uuid.UUID, session: DbSession, user: CurrentUser) -> PreferencesOut:
-    """Basique infini personnel (sel, poivre, huile…) : toujours disponible, jamais à acheter."""
-    food = _visible_food(session, user, food_id)
-    if not food.is_always_infinite and session.get(UserInfiniteFood, (user.id, food.id)) is None:
-        session.add(UserInfiniteFood(user_id=user.id, food_id=food.id))
-        session.flush()
-        recompute_reservations(session, scope_of(session, user.id))
-    session.commit()
-    return _out(session, user)
-
-
-@router.delete("/basics/{food_id}")
-def remove_basic(food_id: uuid.UUID, session: DbSession, user: CurrentUser) -> PreferencesOut:
-    food = session.get(Food, food_id)
-    if food is not None and food.is_always_infinite:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail=f"« {food.name} » est toujours disponible pour tout le monde.")
-    session.execute(delete(UserInfiniteFood).where(UserInfiniteFood.user_id == user.id, UserInfiniteFood.food_id == food_id))
-    session.flush()
-    recompute_reservations(session, scope_of(session, user.id))
     session.commit()
     return _out(session, user)

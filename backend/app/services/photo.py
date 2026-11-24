@@ -1,8 +1,8 @@
-"""Analyse photo de l'inventaire : la photo part au moteur choisi par le super-administrateur,
-qui renvoie la liste des aliments vus ; rien de l'image n'est gardé.
+"""Photo → ingrédients à cocher : la photo part au moteur choisi par le super-administrateur, qui renvoie
+les ingrédients qu'il voit ; ils sont cochés dans la recherche de recettes. Rien de l'image n'est gardé.
 
 Deux moteurs derrière la même interface :
-- API Claude (vision) : précis, lit les dates sur les emballages, payant à l'usage ;
+- API Claude (vision) : précis, payant à l'usage ;
 - modèle local via Ollama (ex. qwen2.5vl:7b sur la carte graphique) : gratuit, rien ne sort du PC,
   moins précis et plus lent.
 
@@ -11,7 +11,7 @@ Les images n'existent qu'en mémoire, le temps de l'appel : jamais écrites sur 
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
@@ -21,7 +21,7 @@ import httpx
 from app.secrets import read_secret
 from app.services.ai_recipes import AiError, AiNotConfigured, create_message
 
-# Vision et lecture des dates très bonnes, deux fois moins cher qu'Opus 5.5 pour cette tâche.
+# Très bonne vision, deux fois moins cher qu'Opus 5.5 pour cette tâche.
 PHOTO_MODEL = "claude-sonnet-5-5"
 
 logger = logging.getLogger("frigo.photo")
@@ -29,8 +29,6 @@ logger = logging.getLogger("frigo.photo")
 MAX_PHOTOS = 6
 MAX_IMAGE_BYTES = 5 * 1024 * 1024  # par image, après décodage (limite de l'API Claude)
 MEDIA_TYPES = {"image/jpeg", "image/png", "image/webp"}
-UNITS = ["g", "kg", "ml", "cl", "l", "piece"]
-STORAGES = ["fridge", "freezer", "pantry", "spice_rack", "fruit_bowl", "other"]
 
 SCAN_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -42,35 +40,20 @@ SCAN_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["name", "quantity", "unit", "storage", "expires_on", "date_type", "confidence",
-                             "question", "options"],
-                "properties": {
-                    "name": {"type": "string"},
-                    "quantity": {"type": "number"},
-                    "unit": {"type": "string", "enum": UNITS},
-                    "storage": {"type": "string", "enum": STORAGES},
-                    "expires_on": {"type": "string"},  # AAAA-MM-JJ, ou vide si illisible
-                    "date_type": {"type": "string", "enum": ["use_by", "best_before", "none"]},
-                    "confidence": {"type": "number"},
-                    "question": {"type": "string"},  # vide si aucun doute
-                    "options": {"type": "array", "items": {"type": "string"}},
-                },
+                "required": ["name", "confidence"],
+                "properties": {"name": {"type": "string"}, "confidence": {"type": "number"}},
             },
         }
     },
 }
 
-SYSTEM_PROMPT = """Tu fais l'inventaire alimentaire d'un foyer français à partir de photos (frigo, congélateur, placard, étagère à épices, corbeille à fruits, sacs de courses).
+SYSTEM_PROMPT = """Tu repères les ingrédients de cuisine visibles sur des photos (frigo, placard, plan de travail, sacs de courses), pour chercher des recettes qui les utilisent.
 
-Pour chaque aliment visible :
-- name : nom courant et générique en français, au singulier (« Yaourt nature », « Carotte », « Lait demi-écrémé »). Reprends exactement un nom de la liste du catalogue quand l'aliment y figure.
-- quantity + unit : quantité estimée. « piece » pour ce qui se compte (œufs, pommes, pots, bouteilles…) ; sinon g, kg, ml, cl ou l, d'après l'emballage quand il est lisible.
-- storage : le lieu où se trouve l'aliment sur la photo (fridge, freezer, pantry, spice_rack, fruit_bowl, other).
-- expires_on : la date de péremption au format AAAA-MM-JJ seulement si elle est lisible sur l'emballage, sinon une chaîne vide. date_type : use_by pour « à consommer jusqu'au » (DLC), best_before pour « à consommer de préférence avant » (DDM), none si aucune date n'est lue.
+Pour chaque ingrédient visible :
+- name : nom courant et générique en français, au singulier, sans marque ni quantité (« Carotte », « Lait demi-écrémé », « Crème fraîche »). Reprends exactement un nom de la liste fournie quand l'ingrédient y figure.
 - confidence : de 0 à 1, ta certitude sur l'identification.
-- question : si tu hésites (aliment ou quantité), une question courte en français, sinon une chaîne vide ; options : 2 à 4 réponses possibles (ex. ["Crème fraîche", "Yaourt nature"]), sinon une liste vide.
 
-Un même aliment présent plusieurs fois avec la même date forme une seule ligne. Ne liste ni l'eau du robinet, ni les objets qui ne sont pas des aliments. N'invente rien que tu ne vois pas."""
+Un même ingrédient n'apparaît qu'une fois. Ne liste ni l'eau du robinet, ni les objets qui ne sont pas des aliments. N'invente rien que tu ne vois pas."""
 
 
 @dataclass
@@ -82,47 +65,23 @@ class Photo:
 @dataclass
 class DetectedItem:
     name: str
-    quantity: float | None
-    unit: str | None
-    storage: str | None
-    expires_on: date | None
-    date_type: str | None
     confidence: float
-    question: str | None
-    options: list[str] = field(default_factory=list)
 
 
-def build_prompt(catalogue_names: list[str], today: date) -> str:
-    return (f"Date du jour : {today.isoformat()} (pour compléter une date lue sans année).\n\n"
-            "Noms du catalogue (à reprendre tels quels si l'aliment y figure) :\n"
-            + ", ".join(catalogue_names)
-            + "\n\nListe tous les aliments visibles sur ces photos.")
+def build_prompt(known_names: list[str], today: date) -> str:
+    return ("Ingrédients connus (à reprendre tels quels si l'ingrédient y figure) :\n"
+            + ", ".join(known_names)
+            + "\n\nListe tous les ingrédients visibles sur ces photos.")
 
 
 def _parse(data: dict) -> list[DetectedItem]:
-    items = []
+    items, seen = [], set()
     for raw in data.get("items", []):
-        name = str(raw.get("name", "")).strip()
-        if not name:
+        name = str(raw.get("name", "")).strip()[:80]
+        if not name or name.lower() in seen:
             continue
-        try:
-            expires = date.fromisoformat(raw.get("expires_on") or "") if raw.get("expires_on") else None
-        except ValueError:
-            expires = None
-        quantity = raw.get("quantity")
-        options = [str(o).strip() for o in raw.get("options") or [] if str(o).strip()][:4]
-        question = str(raw.get("question") or "").strip() or None
-        items.append(DetectedItem(
-            name=name[:120],
-            quantity=float(quantity) if isinstance(quantity, (int, float)) and quantity > 0 else None,
-            unit=raw.get("unit") if raw.get("unit") in UNITS else None,
-            storage=raw.get("storage") if raw.get("storage") in STORAGES else None,
-            expires_on=expires,
-            date_type=raw.get("date_type") if raw.get("date_type") in ("use_by", "best_before") and expires else None,
-            confidence=max(0.0, min(1.0, float(raw.get("confidence") or 0))),
-            question=question,
-            options=options if question else [],
-        ))
+        seen.add(name.lower())
+        items.append(DetectedItem(name=name, confidence=max(0.0, min(1.0, float(raw.get("confidence") or 0)))))
     return items
 
 

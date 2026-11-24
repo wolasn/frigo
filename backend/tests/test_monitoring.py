@@ -1,7 +1,6 @@
 """Surveillance de la base, page de statut et purge nocturne."""
 
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,8 +10,8 @@ from app import secrets as secrets_module
 from app.clock import today
 from app.maintenance import purge
 from app.main import app
-from app.models import Inventory, InventoryItem, InventoryRemoval, StorageLocation, User
-from app.models.enums import DateType, ItemKind, ItemUnit, RemovalReason, UserRole
+from app.models import User
+from app.models.enums import UserRole
 from app.monitoring import read_status, run_check
 
 PASSWORD = "un-mot-de-passe-solide"
@@ -107,33 +106,23 @@ def test_base_injoignable_donne_503():
         app.router.routes = [r for r in app.router.routes if getattr(r, "path", "") != "/api/test-panne"]
 
 
-def test_purge_de_l_historique(client, db_session):
+def test_purge_de_la_nuit(client, db_session, saved_recipe):
+    from app.models import PlannedMeal, Recipe, ShoppingListItem, UserRecipeMeta
+    from app.models.enums import MealSlot, ShoppingOrigin
+
     client.post("/api/auth/register", json={"username": "alice", "display_name": "Alice", "password": PASSWORD})
     user = db_session.scalar(select(User).where(User.username == "alice"))
-    inventory = db_session.scalar(select(Inventory).where(Inventory.personal_owner_id == user.id))
-    location = db_session.scalar(select(StorageLocation).where(StorageLocation.inventory_id == inventory.id).limit(1))
     now = datetime.now(UTC)
-
-    def item(archived_days_ago):
-        row = InventoryItem(
-            inventory_id=inventory.id, kind=ItemKind.LEFTOVER, leftover_name="Testreste", quantity=Decimal(0),
-            unit=ItemUnit.PORTION, storage_location_id=location.id, expires_on=today(), date_type=DateType.ESTIMATED,
-            archived_at=now - timedelta(days=archived_days_ago) if archived_days_ago is not None else None,
-        )
-        db_session.add(row)
-        db_session.flush()
-        return row
-
-    old, recent, active = item(40), item(5), item(None)
+    unused, planned, favorite = saved_recipe("Testpurge seule"), saved_recipe("Testpurge au menu"), saved_recipe("Testpurge favorite")
     db_session.add_all([
-        InventoryRemoval(inventory_item_id=old.id, quantity=1, reason=RemovalReason.CONSUMED, removed_at=now - timedelta(days=40)),
-        InventoryRemoval(inventory_item_id=recent.id, quantity=1, reason=RemovalReason.CONSUMED, removed_at=now - timedelta(days=5)),
+        PlannedMeal(user_id=user.id, meal_date=today(), slot=MealSlot.DINNER, recipe_id=planned.id, servings=2),
+        UserRecipeMeta(user_id=user.id, recipe_id=favorite.id, is_favorite=True),
+        ShoppingListItem(user_id=user.id, origin=ShoppingOrigin.MANUAL, label="Testvieil achat", purchased_at=now - timedelta(days=40)),
     ])
     db_session.flush()
 
     counts = purge(db_session, now)
 
-    assert counts["retraits"] >= 1 and counts["articles archivés"] >= 1
-    assert db_session.get(InventoryItem, old.id) is None
-    assert db_session.get(InventoryItem, recent.id) is not None  # retiré il y a 5 jours : encore restaurable
-    assert db_session.get(InventoryItem, active.id) is not None
+    assert counts["recettes"] >= 1 and counts["achats"] >= 1
+    assert db_session.get(Recipe, unused.id) is None  # ni programmée, ni épinglée, ni en favori
+    assert db_session.get(Recipe, planned.id) is not None and db_session.get(Recipe, favorite.id) is not None

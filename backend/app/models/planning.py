@@ -1,16 +1,16 @@
-"""Agenda (personnel et partagé), réservations, liste de courses et notifications."""
+"""Agenda (personnel et partagé), liste de courses, notifications et recettes du jour."""
 
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Numeric, Text, func
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Numeric, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, created_at_column, pg_enum, uuid_pk
-from app.models.enums import MealSlot, MealStatus, NotificationType, ShoppingOrigin
+from app.models.enums import MealSlot, NotificationType, ShoppingOrigin
 
 
 class PlannedMeal(TimestampMixin, Base):
@@ -22,49 +22,23 @@ class PlannedMeal(TimestampMixin, Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    # Vide = agenda personnel ; rempli = agenda partagé de cet inventaire.
-    shared_inventory_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("inventories.id", ondelete="CASCADE")
+    # Vide = agenda personnel ; rempli = cet agenda partagé.
+    shared_agenda_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("shared_agendas.id", ondelete="CASCADE")
     )
     meal_date: Mapped[date] = mapped_column(Date, nullable=False)
     slot: Mapped[MealSlot] = mapped_column(pg_enum(MealSlot, "meal_slot"), nullable=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    recipe_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("recipes.id", ondelete="RESTRICT"), index=True
+    recipe_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("recipes.id", ondelete="RESTRICT"), nullable=False, index=True
     )
-    leftover_item_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("inventory_items.id", ondelete="RESTRICT"), index=True
-    )
-    servings: Mapped[int] = mapped_column(Integer, nullable=False)  # personnes, ou parts pour un reste
-    status: Mapped[MealStatus] = mapped_column(
-        pg_enum(MealStatus, "meal_status"), nullable=False, server_default=MealStatus.PLANNED.value
-    )
-    done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    servings: Mapped[int] = mapped_column(Integer, nullable=False)
 
     __table_args__ = (
-        CheckConstraint("(recipe_id IS NULL) <> (leftover_item_id IS NULL)", name="recipe_xor_leftover"),
         CheckConstraint("servings BETWEEN 1 AND 999", name="servings_range"),
         Index("ix_planned_meals_user_date", "user_id", "meal_date"),
-        Index("ix_planned_meals_shared_date", "shared_inventory_id", "meal_date"),
+        Index("ix_planned_meals_shared_date", "shared_agenda_id", "meal_date"),
     )
-
-
-class Reservation(Base):
-    """Donnée dérivée : reconstruite par le moteur de calcul."""
-
-    __tablename__ = "reservations"
-
-    id: Mapped[uuid.UUID] = uuid_pk()
-    planned_meal_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("planned_meals.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    inventory_item_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
-    computed_at: Mapped[datetime] = created_at_column()
-
-    __table_args__ = (CheckConstraint("quantity > 0", name="quantity_positive"),)
 
 
 class ShoppingListItem(Base):
@@ -74,9 +48,9 @@ class ShoppingListItem(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    # Vide = liste personnelle ; rempli = liste partagée de cet inventaire.
-    shared_inventory_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("inventories.id", ondelete="CASCADE"), index=True
+    # Vide = liste personnelle ; rempli = liste de cet agenda partagé.
+    shared_agenda_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("shared_agendas.id", ondelete="CASCADE"), index=True
     )
     origin: Mapped[ShoppingOrigin] = mapped_column(pg_enum(ShoppingOrigin, "shopping_origin"), nullable=False)
     food_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("foods.id", ondelete="SET NULL"))
@@ -94,7 +68,7 @@ class ShoppingListItem(Base):
 
 
 class ShoppingListItemMeal(Base):
-    """Donnée dérivée : part du manque due à chaque repas planifié."""
+    """Donnée dérivée : part de la ligne due à chaque repas planifié."""
 
     __tablename__ = "shopping_list_item_meals"
 
@@ -108,8 +82,6 @@ class ShoppingListItemMeal(Base):
 
 
 class Notification(Base):
-    """Les alertes de péremption ne sont pas stockées : elles sont calculées à l'affichage."""
-
     __tablename__ = "notifications"
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -125,7 +97,10 @@ class Notification(Base):
 
 
 class DailyRecipe(Base):
-    """Recettes du jour d'un utilisateur : trois par jour, choisies chaque matin."""
+    """Recettes du jour d'un utilisateur : trois par jour, choisies chaque matin.
+
+    Une recette web n'est pas en base : on garde sa référence (adresse de la page) et un instantané
+    de sa carte. Elle n'entre en base que si elle est programmée, épinglée ou mise en favori."""
 
     __tablename__ = "daily_recipes"
 
@@ -134,11 +109,10 @@ class DailyRecipe(Base):
     )
     day: Mapped[date] = mapped_column(Date, primary_key=True)
     position: Mapped[int] = mapped_column(Integer, primary_key=True)
-    recipe_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("recipes.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    origin: Mapped[str] = mapped_column(Text, nullable=False)  # base, marmiton ou ia
-    query: Mapped[str | None] = mapped_column(Text)  # recherche Marmiton de saison qui l'a apportée
+    recipe_ref: Mapped[str] = mapped_column(Text, nullable=False)  # id d'une recette en base, ou adresse web
+    snapshot: Mapped[Any] = mapped_column(JSONB, nullable=False)  # titre, image, temps… pour l'affichage
+    origin: Mapped[str] = mapped_column(Text, nullable=False)  # web, base, ia ou agent
+    query: Mapped[str | None] = mapped_column(Text)  # recherche de saison qui l'a apportée
     created_at: Mapped[datetime] = created_at_column()
 
-    __table_args__ = (CheckConstraint("origin in ('base', 'marmiton', 'ia')", name="origin"),)
+    __table_args__ = (CheckConstraint("origin in ('web', 'base', 'ia', 'agent')", name="origin"),)

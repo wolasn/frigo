@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select, update
 
 from app.api.deps import CurrentUser, DbSession
-from app.models import InventoryInvitation, Notification
+from app.models import AgendaInvitation, Notification
 from app.models.enums import InvitationStatus, NotificationType
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
@@ -30,13 +30,13 @@ class Summary(BaseModel):
 
 
 def _message(kind: NotificationType, payload: dict[str, Any]) -> str:
-    name = payload.get("inventory_name", "un inventaire")
-    if kind == NotificationType.INVENTORY_INVITATION:
-        return f"{payload.get('invited_by', 'Quelqu’un')} t'invite à rejoindre « {name} »."
-    if kind == NotificationType.REMOVED_FROM_INVENTORY:
+    name = payload.get("agenda_name") or payload.get("inventory_name") or "un agenda"
+    if kind == NotificationType.AGENDA_INVITATION:
+        return f"{payload.get('invited_by', 'Quelqu’un')} t'invite à rejoindre l'agenda « {name} »."
+    if kind == NotificationType.REMOVED_FROM_AGENDA:
         if payload.get("reason") == "supprimé":
-            return f"L'inventaire partagé « {name} » a été supprimé."
-        return f"Tu as été retiré de l'inventaire partagé « {name} »."
+            return f"L'agenda partagé « {name} » a été supprimé."
+        return f"Tu as été retiré de l'agenda partagé « {name} »."
     if kind == NotificationType.RECIPE_SHARED:
         return f"{payload.get('shared_by', 'Quelqu’un')} a partagé la recette « {payload.get('recipe_title', '')} »."
     return payload.get("message", "Notification")
@@ -52,12 +52,12 @@ def list_notifications(session: DbSession, user: CurrentUser) -> Summary:
         select(func.count()).select_from(Notification).where(
             Notification.user_id == user.id,
             Notification.read_at.is_(None),
-            Notification.type != NotificationType.INVENTORY_INVITATION,
+            Notification.type != NotificationType.AGENDA_INVITATION,
         )
     )
     pending = session.scalar(
-        select(func.count()).select_from(InventoryInvitation).where(
-            InventoryInvitation.invited_user_id == user.id, InventoryInvitation.status == InvitationStatus.PENDING
+        select(func.count()).select_from(AgendaInvitation).where(
+            AgendaInvitation.invited_user_id == user.id, AgendaInvitation.status == InvitationStatus.PENDING
         )
     )
     return Summary(

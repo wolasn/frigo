@@ -31,7 +31,7 @@ def test_suivi_par_utilisateur(client, db_session, catalogue, monkeypatch):  # n
                         lambda photos, names, day, **kw: analyze_with_claude(photos, names, day, FakeClaude(), **kw))
     client.post("/api/auth/register", json={"username": "alice", "display_name": "Alice", "password": PASSWORD})
     client.post("/api/recipes/generate", json={"count": 1})  # 1200 jetons en entrée, 900 en sortie (Opus 5.5)
-    client.post("/api/photo-scans", json={"photos": [{"media_type": "image/jpeg", "data": PIXEL}]})  # 2000 / 300
+    client.post("/api/photo/ingredients", json={"photos": [{"media_type": "image/jpeg", "data": PIXEL}]})  # 2000 / 300
     assert client.get("/api/admin/ai-usage").status_code == 403  # réservé au super-administrateur
 
     client.cookies.clear()

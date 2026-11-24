@@ -1,7 +1,7 @@
 """Recettes personnelles : création, brouillon / complète, copie, partage, suppression.
 
-Un brouillon n'apparaît que dans « Mes recettes » ; une recette complète apparaît dans les
-propositions. Seul l'auteur modifie, partage ou supprime ; les destinataires d'un partage
+Un brouillon n'apparaît que dans « Mes recettes » ; une recette complète apparaît aussi dans
+la recherche. Seul l'auteur modifie, partage ou supprime ; les destinataires d'un partage
 la voient en lecture seule et peuvent en faire une copie.
 """
 
@@ -9,7 +9,7 @@ import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -17,9 +17,8 @@ from sqlalchemy.orm import Session
 from app.api.catalog import visible_foods
 from app.api.deps import CurrentUser, DbSession
 from app.models import (
+    AgendaMember,
     Food,
-    Inventory,
-    InventoryMember,
     Notification,
     PlannedMeal,
     Recipe,
@@ -27,13 +26,12 @@ from app.models import (
     RecipeShare,
     RecipeStep,
     RecipeUtensil,
+    SharedAgenda,
     User,
     Utensil,
 )
 from app.models.enums import (
     Difficulty,
-    InventoryKind,
-    MealStatus,
     NotificationType,
     RecipeSource,
     RecipeStatus,
@@ -42,8 +40,8 @@ from app.models.enums import (
 )
 from app.services.health import score_from_foods
 from app.services.ingredients import ParsedIngredient, to_reference_quantity
-from app.services.planning import recompute_reservations, scope_of
-from app.services.proposals import UNIT_DISPLAY
+from app.clock import today
+from app.services.evaluation import UNIT_DISPLAY
 from app.services.recipes import visible_recipes_clause
 
 router = APIRouter(prefix="/api/my-recipes", tags=["mes recettes"])
@@ -129,13 +127,13 @@ class MyRecipesOut(BaseModel):
 
 class ShareIn(BaseModel):
     username: str | None = Field(default=None, max_length=64)
-    inventory_id: uuid.UUID | None = None
+    agenda_id: uuid.UUID | None = None
 
 
 class ShareOut(BaseModel):
     id: uuid.UUID
     label: str
-    kind: str  # "user" ou "inventory"
+    kind: str  # "user" ou "agenda"
 
 
 # ---------- Outils ----------
@@ -325,38 +323,34 @@ def update_recipe(recipe_id: uuid.UUID, body: RecipeIn, session: DbSession, user
     _write_content(session, user, recipe, body)
     if recipe.status == RecipeStatus.DRAFT:
         session.execute(delete(RecipeShare).where(RecipeShare.recipe_id == recipe.id))  # un brouillon ne se partage pas
-    # Les quantités ont pu changer : seulement pour ceux qui ont prévu cette recette (et leur groupe).
-    planners = set(session.scalars(select(PlannedMeal.user_id).where(
-        PlannedMeal.recipe_id == recipe.id, PlannedMeal.status == MealStatus.PLANNED)))
-    if planners:
-        recompute_reservations(session, scope_of(session, *planners))
     session.commit()
     return _edit_view(session, recipe)
 
 
-@router.post("/{recipe_id}/copy", status_code=status.HTTP_201_CREATED)
-def copy_recipe(recipe_id: uuid.UUID, session: DbSession, user: CurrentUser) -> RecipeEdit:
-    """Copie n'importe quelle recette visible (Marmiton, IA, partagée) en brouillon personnel."""
-    source = session.scalar(select(Recipe).where(Recipe.id == recipe_id, visible_recipes_clause(user)))
-    if source is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Recette introuvable.")
+@router.post("/copy", status_code=status.HTTP_201_CREATED)
+def copy_recipe(session: DbSession, user: CurrentUser, ref: str = Query(max_length=600)) -> RecipeEdit:
+    """Copie n'importe quelle recette visible (site web, IA, partagée) en brouillon personnel."""
+    from app.api.recipes import resolve
+
+    draft = resolve(session, user, ref)
+    source = draft.recipe
     copy = Recipe(
         title=f"{source.title} (ma version)"[:200], source=RecipeSource.USER, status=RecipeStatus.DRAFT,
-        author_user_id=user.id, copied_from_recipe_id=source.id, servings=source.servings,
+        author_user_id=user.id, copied_from_recipe_id=source.id if draft.in_db else None, servings=source.servings,
         prep_minutes=source.prep_minutes, cook_minutes=source.cook_minutes, difficulty=source.difficulty,
         image_url=source.image_url, is_vegan=source.is_vegan, is_vegetarian=source.is_vegetarian,
         health_score=source.health_score, nutrition_per_serving=source.nutrition_per_serving,
     )
     session.add(copy)
     session.flush()
-    for i in session.scalars(select(RecipeIngredient).where(RecipeIngredient.recipe_id == source.id)):
+    for i, _ in draft.ingredients:
         session.add(RecipeIngredient(recipe_id=copy.id, position=i.position, raw_text=i.raw_text, food_id=i.food_id,
                                      quantity=i.quantity, unit=i.unit, quantity_ref=i.quantity_ref, is_optional=i.is_optional))
-    for s in session.scalars(select(RecipeStep).where(RecipeStep.recipe_id == source.id)):
-        session.add(RecipeStep(recipe_id=copy.id, position=s.position, instruction=s.instruction))
-    for u in session.scalars(select(RecipeUtensil).where(RecipeUtensil.recipe_id == source.id)):
-        session.add(RecipeUtensil(recipe_id=copy.id, utensil_id=u.utensil_id, requirement=u.requirement,
-                                  alternative_group=u.alternative_group))
+    for position, text in enumerate(draft.steps):
+        session.add(RecipeStep(recipe_id=copy.id, position=position, instruction=text))
+    for u, _ in draft.utensils:
+        session.add(RecipeUtensil(recipe_id=copy.id, utensil_id=u.utensil_id,
+                                  requirement=u.requirement or UtensilRequirement.REQUIRED, alternative_group=u.alternative_group))
     session.commit()
     return _edit_view(session, copy)
 
@@ -365,11 +359,11 @@ def copy_recipe(recipe_id: uuid.UUID, session: DbSession, user: CurrentUser) -> 
 def delete_recipe(recipe_id: uuid.UUID, session: DbSession, user: CurrentUser) -> None:
     recipe = _own_recipe(session, user, recipe_id)
     planned = session.scalar(select(func.count()).select_from(PlannedMeal).where(
-        PlannedMeal.recipe_id == recipe.id, PlannedMeal.status == MealStatus.PLANNED))
+        PlannedMeal.recipe_id == recipe.id, PlannedMeal.meal_date >= today()))
     if planned:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail="Cette recette est prévue dans un agenda : annule d'abord ces repas.")
-    session.execute(delete(PlannedMeal).where(PlannedMeal.recipe_id == recipe.id))  # repas passés ou annulés
-    session.delete(recipe)  # aucun repas prévu ne l'utilise : pas de réservation à recalculer
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="Cette recette est au menu d'un agenda : retire d'abord ces repas.")
+    session.execute(delete(PlannedMeal).where(PlannedMeal.recipe_id == recipe.id))  # repas passés
+    session.delete(recipe)
     session.flush()
     session.commit()
 
@@ -381,15 +375,15 @@ def delete_recipe(recipe_id: uuid.UUID, session: DbSession, user: CurrentUser) -
 def list_shares(recipe_id: uuid.UUID, session: DbSession, user: CurrentUser) -> list[ShareOut]:
     recipe = _own_recipe(session, user, recipe_id)
     rows = session.execute(
-        select(RecipeShare, User.display_name, User.username, Inventory.name)
+        select(RecipeShare, User.display_name, User.username, SharedAgenda.name)
         .outerjoin(User, User.id == RecipeShare.shared_with_user_id)
-        .outerjoin(Inventory, Inventory.id == RecipeShare.shared_with_inventory_id)
+        .outerjoin(SharedAgenda, SharedAgenda.id == RecipeShare.shared_with_agenda_id)
         .where(RecipeShare.recipe_id == recipe.id)
     ).all()
     return [
         ShareOut(id=s.id, kind="user", label=f"{d} (@{u})") if s.shared_with_user_id
-        else ShareOut(id=s.id, kind="inventory", label=f"Membres de « {inv} »")
-        for s, d, u, inv in rows
+        else ShareOut(id=s.id, kind="agenda", label=f"Membres de « {name} »")
+        for s, d, u, name in rows
     ]
 
 
@@ -398,8 +392,8 @@ def share_recipe(recipe_id: uuid.UUID, body: ShareIn, session: DbSession, user: 
     recipe = _own_recipe(session, user, recipe_id)
     if recipe.status != RecipeStatus.COMPLETE:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="Seule une recette complète peut être partagée.")
-    if (body.username is None) == (body.inventory_id is None):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Choisis une personne ou un inventaire partagé.")
+    if (body.username is None) == (body.agenda_id is None):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Choisis une personne ou un agenda partagé.")
 
     recipients: list[uuid.UUID] = []
     if body.username:
@@ -414,15 +408,15 @@ def share_recipe(recipe_id: uuid.UUID, body: ShareIn, session: DbSession, user: 
         session.add(RecipeShare(recipe_id=recipe.id, shared_with_user_id=target.id, shared_by=user.id))
         recipients = [target.id]
     else:
-        inventory = session.get(Inventory, body.inventory_id)
-        if inventory is None or inventory.kind != InventoryKind.SHARED or session.get(InventoryMember, (inventory.id, user.id)) is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Inventaire partagé introuvable.")
-        exists = session.scalar(select(RecipeShare.id).where(RecipeShare.recipe_id == recipe.id, RecipeShare.shared_with_inventory_id == inventory.id))
+        agenda = session.get(SharedAgenda, body.agenda_id)
+        if agenda is None or session.get(AgendaMember, (agenda.id, user.id)) is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Agenda partagé introuvable.")
+        exists = session.scalar(select(RecipeShare.id).where(RecipeShare.recipe_id == recipe.id, RecipeShare.shared_with_agenda_id == agenda.id))
         if exists:
-            raise HTTPException(status.HTTP_409_CONFLICT, detail="Déjà partagée avec cet inventaire.")
-        session.add(RecipeShare(recipe_id=recipe.id, shared_with_inventory_id=inventory.id, shared_by=user.id))
-        recipients = list(session.scalars(select(InventoryMember.user_id).where(
-            InventoryMember.inventory_id == inventory.id, InventoryMember.user_id != user.id)))
+            raise HTTPException(status.HTTP_409_CONFLICT, detail="Déjà partagée avec cet agenda.")
+        session.add(RecipeShare(recipe_id=recipe.id, shared_with_agenda_id=agenda.id, shared_by=user.id))
+        recipients = list(session.scalars(select(AgendaMember.user_id).where(
+            AgendaMember.agenda_id == agenda.id, AgendaMember.user_id != user.id)))
 
     now = datetime.now(UTC)
     for recipient in recipients:

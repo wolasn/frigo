@@ -1,4 +1,4 @@
-"""Catalogue : catégories, recherche d'aliments, aliments personnels, basiques infinis."""
+"""Catalogue : catégories, recherche d'aliments, aliments personnels."""
 
 import uuid
 
@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import case, exists, func, or_, select
 
 from app.api.deps import CurrentUser, DbSession
-from app.models import Food, FoodAlias, FoodCategory, InventoryItem, InventoryMember, UserInfiniteFood
+from app.models import AgendaMember, Food, FoodAlias, FoodCategory, RecipeIngredient, RecipeShare
 from app.models.enums import ReferenceUnit
 from app.services.units import UNITS_BY_REFERENCE
 
@@ -39,14 +39,13 @@ class FoodCreate(BaseModel):
 
 
 def visible_foods(user_id: uuid.UUID):
-    """Catalogue commun + aliments personnels de l'utilisateur + aliments personnels d'autres
-    membres présents dans un inventaire partagé dont il fait partie."""
-    shared_inventories = select(InventoryMember.inventory_id).where(InventoryMember.user_id == user_id)
-    in_shared = select(InventoryItem.food_id).where(
-        InventoryItem.inventory_id.in_(shared_inventories),
-        InventoryItem.food_id.is_not(None),
-        InventoryItem.archived_at.is_(None),  # tant qu'un article de cet aliment s'y trouve
-    )
+    """Catalogue commun + aliments personnels de l'utilisateur + aliments personnels d'autres comptes
+    utilisés dans une recette partagée avec lui (directement ou via un agenda partagé)."""
+    my_agendas = select(AgendaMember.agenda_id).where(AgendaMember.user_id == user_id)
+    shared_recipes = select(RecipeShare.recipe_id).where(
+        or_(RecipeShare.shared_with_user_id == user_id, RecipeShare.shared_with_agenda_id.in_(my_agendas)))
+    in_shared = select(RecipeIngredient.food_id).where(
+        RecipeIngredient.recipe_id.in_(shared_recipes), RecipeIngredient.food_id.is_not(None))
     return or_(Food.owner_user_id.is_(None), Food.owner_user_id == user_id, Food.id.in_(in_shared))
 
 
@@ -112,20 +111,3 @@ def create_private_food(body: FoodCreate, session: DbSession, user: CurrentUser)
     session.add(food)
     session.commit()
     return food_out(food, category.name)
-
-
-@router.get("/basics")
-def list_infinite_basics(session: DbSession, user: CurrentUser) -> list[FoodOut]:
-    """Basiques toujours disponibles : l'eau pour tous, plus ceux ajoutés par l'utilisateur."""
-    query = (
-        select(Food, FoodCategory.name)
-        .join(FoodCategory, FoodCategory.id == Food.category_id)
-        .where(
-            or_(
-                Food.is_always_infinite.is_(True),
-                Food.id.in_(select(UserInfiniteFood.food_id).where(UserInfiniteFood.user_id == user.id)),
-            )
-        )
-        .order_by(Food.is_always_infinite.desc(), Food.name)
-    )
-    return [food_out(food, category) for food, category in session.execute(query)]
