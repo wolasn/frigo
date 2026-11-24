@@ -1,7 +1,7 @@
 # Frigo & Repas
 
-Application web pour gérer l'inventaire alimentaire, proposer et planifier des repas,
-et générer la liste de courses. Spécification complète : document « Spécification —
+Application web pour trouver des recettes à partir d'ingrédients cochés, planifier ses repas dans un
+agenda (personnel ou partagé) et générer la liste de courses. Spécification complète : document « Spécification —
 Application Frigo & Repas » (onglets principal et Modèle de données).
 
 ## Stack
@@ -70,26 +70,54 @@ dans `backend/app/seed/catalogue_data.py`.
 Le bilan « Équilibre de la semaine » de l'agenda applique des règles fixes inspirées des repères
 du PNNS (Santé publique France) : voir `backend/app/services/balance.py`.
 
-Après avoir enrichi le catalogue, refaire le rapprochement des ingrédients des recettes Marmiton déjà importées :
+Après avoir enrichi le catalogue, refaire le rapprochement des ingrédients des recettes web gardées :
 
 ```
 docker compose exec app python -m app.cli rematch-ingredients
 ```
 
-Pour démarrer avec des recettes variées (une cinquantaine de recherches Marmiton : légumineuses,
-poisson, volaille, végétarien, soupes… environ 5 minutes). Chaque relance ajoute 3 nouvelles
-recettes par recherche : celles déjà en base (même adresse ou même titre) sont sautées.
+La liste des ingrédients à cocher (table `ingredient_terms`) se remplit à chaque recette lue sur un site.
+Pour l'enrichir d'un coup (une sélection variée de recherches sur les sites, quelques minutes) :
 
 ```
-docker compose exec app python -m app.cli import-marmiton-selection
+docker compose exec app python -m app.cli enrich-ingredients
 ```
 
-## Inventaire par photo
+## Recherche de recettes
 
-Bouton « 📷 Photo » de la page Inventaire : prendre des photos (caméra dans la page) ou en importer,
-jusqu'6 par analyse, puis corriger la liste détectée avant de l'ajouter. Les photos sont réduites
-dans le navigateur, envoyées en mémoire, jamais enregistrées (ni sur le disque, ni en base) ;
-seules les lignes détectées sont gardées 30 jours.
+Onglet Repas → Recherche : cocher des ingrédients (à la main ou par photo), un texte libre ou un lien de
+recette, et des filtres (personnes, régime, temps total, plage de score santé, difficultés Facile / Moyenne /
+Difficile, ustensiles). La recherche interroge les sites et les recettes créées par les utilisateurs ; les
+recettes qui contiennent le plus d'ingrédients cochés passent en premier.
+
+- « Uniquement ces ingrédients » écarte toute recette qui demande autre chose que les ingrédients cochés,
+  sauf ceux de la liste « Ingrédients toujours tolérés » des Préférences (au départ : eau, sel, huile d'olive,
+  poivre).
+- Temps total = préparation + cuisson (le temps total annoncé par le site et le repos ne sont pas comptés).
+- Sites lus : Marmiton, Cuisine AZ et Ptitchef (données structurées schema.org des fiches), au plus une requête
+  toutes les 1,5 s par site, les sites en parallèle. 750g et le Journal des Femmes interdisent leur page de
+  recherche aux robots (robots.txt) : ils ne sont pas utilisés. Code : `backend/app/services/sources/`.
+- Une recette trouvée reste en mémoire 24 h ; une recherche est réutilisée 7 jours (table `web_search_cache`).
+- Une recette n'est gardée en base que si elle est créée, programmée à l'agenda, épinglée, en favori ou
+  partagée. Les autres sont effacées par la purge de la nuit.
+- « Inventer avec l'IA » part des ingrédients cochés (8 appels par jour et par compte au plus).
+
+## Agenda, courses et partages
+
+- Un clic sur un moment d'un jour ouvre la recherche ; choisir une recette la programme à ce moment-là.
+  L'agenda se modifie à toutes les dates, passé compris.
+- Le « + » d'un moment vide et « Proposer des repas » suivent les règles des recettes du jour (ci-dessous),
+  en équilibrant la semaine.
+- Courses : tous les ingrédients des repas prévus à partir d'aujourd'hui, regroupés et additionnés, sauf
+  l'eau. Cocher puis « C'est acheté » retire ces articles de la liste pour ces repas.
+- Partages : un agenda partagé (coloc, famille…) réunit les repas de ses membres, avec sa propre liste de
+  courses. Rôles : administrateur, contributeur, membre.
+
+## Ingrédients par photo
+
+Bouton « 📷 Photo » de la recherche : prendre des photos (caméra dans la page) ou en importer, jusqu'à 6 par
+analyse. Les ingrédients reconnus sont cochés dans la liste, à corriger avant de chercher. Les photos sont
+réduites dans le navigateur, envoyées en mémoire, et rien n'est enregistré (ni photo, ni résultat).
 
 - La caméra dans la page demande une adresse sécurisée (https, ou localhost sur le PC). Depuis un
   téléphone sur le Wi-Fi (http://adresse-du-pc:8000), le bouton ouvre l'appareil photo du téléphone.
@@ -106,7 +134,7 @@ ollama pull qwen2.5vl:7b
 - Préchauffage : avec le modèle local, ouvrir la fenêtre « 📷 Photo » demande à Ollama de charger le
   modèle (environ 30 s), pendant qu'on prend les photos ; il reste chargé 15 min après le dernier usage.
 - Repli : si le modèle local ne répond pas (PC éteint, en veille, hors réseau, modèle absent), l'analyse
-  passe par l'API Claude, et l'écran d'analyse l'indique. Délai de connexion : 5 s. Le repli se coupe
+  passe par l'API Claude, et la fenêtre l'indique. Délai de connexion : 5 s. Le repli se coupe
   dans le même réglage.
 
 ### Application sur un serveur, modèle sur le PC Windows
@@ -130,17 +158,18 @@ Quand le PC est éteint ou en veille, les analyses partent sur l'API Claude.
 En haut de l'onglet Repas, trois idées par jour et par compte, préparées chaque matin à 4 h (ou à l'ouverture
 de l'onglet pour un compte qui n'en a pas encore) :
 
-1. deux recherches Marmiton de saison, qui changent chaque jour (légumes et produits de la mer du mois,
-   plats de saison), apportent quelques recettes nouvelles ;
-2. toutes les recettes de la base sont classées : produits de saison, aliments qui périment bientôt, peu
-   d'achats, notes, score santé ; un produit hors saison pénalise ; les trois choisies évitent le même produit ;
-3. sont écartées les recettes proposées ces 14 derniers jours, cuisinées ces 10 derniers jours ou prévues à
-   l'agenda dans la semaine, celles que le régime, les allergies ou les ustensiles excluent, et les desserts,
-   boissons et préparations de base (repérés au titre) ;
+1. deux recherches de saison sur les sites, qui changent chaque jour (légumes et produits de la mer du mois,
+   plats de saison), plus les recettes du compte (créées, épinglées, en favori) ;
+2. sont écartées les recettes proposées ces 14 derniers jours ou à l'agenda (14 derniers jours, 7 prochains,
+   agendas partagés compris), celles que le régime, les allergies ou les ustensiles excluent, et les desserts,
+   boissons et préparations de base ;
+3. les autres sont classées : produits de saison, notes (du compte, sinon du site), score santé ; un produit
+   hors saison pénalise ; les trois choisies évitent le même produit et varient les sites ;
 4. en dernier recours, s'il manque des recettes, l'IA en invente (dans la limite quotidienne).
 
-Calendrier des saisons : `backend/app/services/season.py`. Préparer maintenant :
-`docker compose exec app python -m app.cli daily-recipes`.
+Seuls l'adresse et un instantané de la carte sont gardés : la recette n'entre en base que si elle est
+programmée, épinglée ou mise en favori. Calendrier des saisons : `backend/app/services/season.py`.
+Préparer maintenant : `docker compose exec app python -m app.cli daily-recipes`.
 
 ### Agent IA des recettes du jour (sur le PC)
 
@@ -149,16 +178,12 @@ compte actif. Ses consignes (le prompt réglé à l'avance) sont dans ce fichier
 une tâche planifiée de l'appli Claude le lance vers 7 h sur le PC (appli Claude ouverte et Docker Desktop
 démarré ; sinon il passe au prochain lancement et les recettes de l'automatisation restent en place).
 
-Ses seuls outils passent par `sh agent/outils.sh <commande>` (`comptes`, `contexte`, `chercher`, `marmiton`,
-`detail`, `definir`) : un conteneur de l'appli sur le PC, avec le code actuel du dossier `backend` et la même
-base que le serveur. `definir` n'accepte que des recettes que l'appli juge acceptables (régime, allergies,
-ustensiles, pas de dessert, pas de répétition sur 14 jours). Il écrit ce qu'il a fait dans `agent/journal/`
-(non versionné). `.claude/settings.json` n'autorise que ces commandes et l'écriture du journal.
-
-## Recettes Marmiton
-
-Les recettes sont lues sur Marmiton (données structurées des fiches), au plus une requête toutes les 1,5 s,
-et gardées en cache dans la base : une recette n'est téléchargée qu'une fois, une recherche est réutilisée 7 jours.
+Ses seuls outils passent par `sh agent/outils.sh <commande>` (`comptes`, `contexte`, `chercher`, `detail`,
+`definir`) : un conteneur de l'appli sur le PC, avec le code actuel du dossier `backend` et la même
+base que le serveur. Les recettes se désignent par l'adresse de leur page (ou leur id en base). `definir`
+n'accepte que des recettes que l'appli juge acceptables (régime, allergies, ustensiles, pas de dessert, pas de
+répétition). Il écrit ce qu'il a fait dans `agent/journal/` (non versionné). `.claude/settings.json`
+n'autorise que ces commandes et l'écriture du journal.
 
 ## Base de données (migrations Alembic)
 
@@ -178,7 +203,7 @@ Toujours relire une migration générée avant de l'appliquer.
 | Quand | Quoi | Où |
 | --- | --- | --- |
 | Chaque jour à 6 h | Vérification de la base (3 essais), e-mail au super-administrateur si elle est bloquée, puis au retour | Conteneur `app` |
-| Chaque nuit à 3 h 30 | Purge : retraits de plus d'un mois, articles archivés, analyses photo de plus de 30 jours, sessions expirées | Conteneur `app` |
+| Chaque nuit à 3 h 30 | Purge : recettes non gardées (ni créées, ni programmées, ni épinglées, ni en favori), recherches de plus de 7 jours, achats de plus d'un mois, sessions expirées | Conteneur `app` |
 | Chaque matin à 4 h | Recettes du jour des comptes connectés ces 30 derniers jours | Conteneur `app` |
 | Lundi et jeudi à 3 h | Sauvegarde compressée (`pg_dump` 17, schéma `public`) dans `./backups`, les 2 plus récentes gardées | Conteneur `backup` |
 
