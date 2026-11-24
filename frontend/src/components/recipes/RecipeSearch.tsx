@@ -120,7 +120,7 @@ export default function RecipeSearch({
   return (
     <div>
       <form onSubmit={search} className="mb-4 space-y-3 rounded-xl border border-stone-200 bg-white p-4 dark:border-stone-800 dark:bg-stone-900">
-        <IngredientPicker checked={checked} onToggle={toggle} onPhoto={() => setPhoto(true)} />
+        <IngredientPicker checked={checked} hidden={tolerated} onToggle={toggle} onPhoto={() => setPhoto(true)} />
         {checked.length > 0 && (
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" className="mt-0.5 size-4 accent-brand-600" checked={only} onChange={(e) => setOnly(e.target.checked)} />
@@ -254,7 +254,7 @@ export default function RecipeSearch({
               {only ? "Décoche « Uniquement ces ingrédients » ou ajoute des ingrédients tolérés dans Préférences." : "Essaie moins de filtres ou d'autres ingrédients."}
             </div>
           ) : (
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className={"grid gap-4 sm:grid-cols-2" + (compact ? "" : " lg:grid-cols-3")}>
               {results.map((card) => (
                 <RecipeCardView key={card.id} card={card} onOpen={() => onOpen(card, { ingredients: checked, servings })} />
               ))}
@@ -268,7 +268,12 @@ export default function RecipeSearch({
 }
 
 /** Ingrédients à cocher : recherche dans la liste (noms vus dans les recettes des sites), les plus courants, photo. */
-function IngredientPicker({ checked, onToggle, onPhoto }: { checked: string[]; onToggle: (name: string) => void; onPhoto: () => void }) {
+function IngredientPicker({ checked, hidden, onToggle, onPhoto }: {
+  checked: string[];
+  hidden: string[]; // ingrédients toujours tolérés : inutile de les proposer
+  onToggle: (name: string) => void;
+  onPhoto: () => void;
+}) {
   const [query, setQuery] = useState("");
   const [popular, setPopular] = useState<Term[]>([]);
   const [suggestions, setSuggestions] = useState<Term[]>([]);
@@ -337,7 +342,7 @@ function IngredientPicker({ checked, onToggle, onPhoto }: { checked: string[]; o
       </div>
       {popular.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
-          {popular.filter((t) => !checked.includes(t.name)).slice(0, 18).map((t) => (
+          {popular.filter((t) => !checked.includes(t.name) && !hidden.some((h) => h.toLowerCase() === t.name.toLowerCase())).slice(0, 18).map((t) => (
             <button key={t.name} type="button" onClick={() => onToggle(t.name)}
               className="rounded-full border border-stone-300 px-2.5 py-0.5 text-xs text-stone-700 hover:border-brand-500 dark:border-stone-700 dark:text-stone-300">
               + {t.name}

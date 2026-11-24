@@ -55,7 +55,7 @@ export default function AuthPage({ onAuthenticated }: { onAuthenticated: (user: 
       <div className="w-full max-w-sm">
         <h1 className="mb-1 text-2xl font-semibold">Frigo &amp; Repas</h1>
         <p className="mb-6 text-sm text-stone-600 dark:text-stone-400">
-          Ton inventaire, tes repas et tes courses, au même endroit.
+          Tes recettes, ton agenda de repas et tes courses, au même endroit.
         </p>
 
         <div className="mb-5 grid grid-cols-2 rounded-lg bg-stone-200 p-1 text-sm dark:bg-stone-800" role="tablist">
@@ -113,7 +113,7 @@ export default function AuthPage({ onAuthenticated }: { onAuthenticated: (user: 
                 onChange={(e) => setDisplayName(e.target.value)}
                 autoComplete="nickname"
                 maxLength={60}
-                placeholder="Visible par les membres de tes inventaires partagés"
+                placeholder="Visible par les membres de tes agendas partagés"
               />
             </label>
           )}

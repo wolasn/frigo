@@ -310,7 +310,7 @@ export default function PreferencesPage({ user, onUserChanged, onAccountDeleted 
       <section className="rounded-xl border border-red-300 p-5 dark:border-red-900">
         <h2 className="font-semibold text-red-700 dark:text-red-400">Supprimer mon compte</h2>
         <p className="mb-3 text-sm text-stone-600 dark:text-stone-400">
-          Efface ton compte, ton inventaire personnel, ton agenda, tes recettes et tes préférences. Tes inventaires partagés sont transmis au membre le plus ancien, ou supprimés si tu y étais seul.
+          Efface ton compte, ton agenda, tes recettes et tes préférences. Tes agendas partagés sont transmis au membre le plus ancien, ou supprimés si tu y étais seul.
         </p>
         <form onSubmit={deleteAccount} className="flex max-w-md items-end gap-2">
           <Field label="Mot de passe">

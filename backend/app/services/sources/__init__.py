@@ -113,6 +113,8 @@ def recipe_from_data(data: dict, url: str, site: str, difficulty: Difficulty, ti
     title = _text(data.get("name"))
     if title_suffix:
         title = re.sub(title_suffix, "", title, flags=re.I).strip()
+    title = title.strip(" *~-_=#.").strip()  # « *** soupe … *** »
+    title = title[:1].upper() + title[1:]
     image = data.get("image")
     if isinstance(image, list):
         image = image[0] if image else None
