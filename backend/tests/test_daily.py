@@ -36,7 +36,9 @@ def test_de_saison_sans_dessert_et_rien_en_base(db_session, env):
     before = db_session.scalar(select(func.count()).select_from(Recipe))
     rows = daily.choose(db_session, env["user"], NOVEMBER)
     assert len(rows) == 3
-    assert set(titles(rows[:2])) == {"test-daily soupe potiron", "test-daily soupe poireaux"}
+    # deux soupes de saison, mais pas l'une après l'autre : un autre type de plat s'intercale
+    assert set(titles(rows)) == {"test-daily soupe potiron", "test-daily soupe poireaux", "test-daily plat pâtes"}
+    assert titles(rows)[0].startswith("test-daily soupe") and titles(rows)[1] == "test-daily plat pâtes"
     assert "test-daily plat gateau au chocolat" not in titles(rows)
     assert "test-daily plat tomates courgettes" not in titles(rows)  # hors saison : après les autres
     assert rows[0].origin == "web" and rows[0].recipe_ref.startswith("https://")
@@ -108,6 +110,22 @@ def test_recherches_de_saison_qui_tournent(monkeypatch):
     assert all(len(q) == 2 for q in queries)
     assert queries[0] != queries[1] != queries[2]
     assert "tomate" not in {q for qs in queries for q in qs}
+    produce = set(daily.season.search_produce(NOVEMBER))
+    assert all(qs[0] in produce and qs[1] not in produce for qs in queries)  # un produit, puis un plat
+
+
+def test_pas_trois_plats_du_meme_type():
+    assert daily.style("Gratin de chou-fleur") == daily.style("Hachis Parmentier") == "gratin"
+    assert daily.style("Velouté de potiron") == "soupe" and daily.style("Poulet rôti") is None
+
+    def pick(title, score):
+        draft = type("D", (), {"recipe": type("R", (), {"title": title, "site": None})()})()
+        return type("P", (daily.Pick,), {"draft": draft})(None, score, [])
+
+    picks = [pick("Gratin de chou-fleur", 10), pick("Gratin de potiron", 9.5), pick("Gratin d'endives", 9),
+             pick("Poulet aux poireaux", 7)]
+    chosen = [p.draft.recipe.title for p in daily.diverse(picks, 3)]
+    assert chosen.count("Poulet aux poireaux") == 1 and sum(t.startswith("Gratin") for t in chosen) == 2
 
 
 def test_api_recettes_du_jour(client, db_session, env):

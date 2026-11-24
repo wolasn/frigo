@@ -107,6 +107,11 @@ def out_of_season(day: date) -> list[str]:
     return [name for name, months in SEASONAL.items() if day.month not in months]
 
 
+def search_produce(day: date) -> list[str]:
+    """Légumes et produits de la mer du mois, sans la précision entre parenthèses, pour une recherche."""
+    return [name.split("(")[0].strip().lower() for name in in_season(day, fruits=False)]
+
+
 def search_pool(day: date) -> list[str]:
     """Recherches de saison du mois : légumes et produits de la mer (sans la précision entre parenthèses), puis plats."""
     produce = [name.split("(")[0].strip().lower() for name in in_season(day, fruits=False)]

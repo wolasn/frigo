@@ -87,10 +87,37 @@ class Pick:
 
 
 def queries_for_day(day: date, count: int = DAILY_QUERIES) -> list[str]:
-    """Recherches de saison, qui tournent d'un jour à l'autre."""
-    pool = season.search_pool(day)
-    start = (day.toordinal() * DAILY_QUERIES) % len(pool)
-    return [pool[(start + i) % len(pool)] for i in range(min(count, len(pool)))]
+    """Recherches de saison, qui tournent d'un jour à l'autre : un produit du mois, puis un plat, en alternance."""
+    produce, themes = season.search_produce(day), season.THEMES[day.month]
+    n = day.toordinal()
+    out: list[str] = []
+    for i in range(count):
+        source = produce if i % 2 == 0 or not themes else themes
+        if not source:
+            source = themes or produce
+        query = source[(n + i // 2) % len(source)]
+        if query not in out:
+            out.append(query)
+    return out
+
+
+STYLES = {
+    "gratin": r"gratin|parmentier",
+    "soupe": r"soupe|veloute|potage|creme de",
+    "tarte": r"tarte|quiche|tourte|feuillete",
+    "curry": r"curry|dahl|dal\b|tajine|colombo",
+    "salade": r"salade",
+    "pates": r"pates|spaghetti|tagliatelle|lasagne|penne|fettuccine|gnocchi",
+    "riz": r"risotto|riz\b|paella",
+    "poelee": r"poelee|wok|saute",
+}
+_STYLES = [(name, re.compile(rf"\b(?:{pattern})")) for name, pattern in STYLES.items()]
+
+
+def style(title: str) -> str | None:
+    """Type de plat repéré au titre (gratin, soupe, tarte…), pour ne pas en proposer trois pareils."""
+    text = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode().lower()
+    return next((name for name, pattern in _STYLES if pattern.search(text)), None)
 
 
 def account_drafts(session: Session, user: User) -> list[Draft]:
@@ -160,16 +187,25 @@ def candidates(session: Session, user: User, day: date, drafts: list[Draft], exc
 
 
 def diverse(picks: list[Pick], count: int, used_products: set[str] | None = None) -> list[Pick]:
-    """Les meilleures, en évitant de reprendre le même produit de saison, et en variant les sites."""
+    """Les meilleures, en évitant de reprendre le même produit de saison ou le même type de plat, et en variant les sites."""
     left, chosen = list(picks), []
     used = set(used_products or ())
     sites: list[str | None] = []
+    styles: list[str] = []
+
+    def value(p: Pick) -> float:
+        kind = style(p.draft.recipe.title)
+        return (p.score - 2.5 * len(used & set(p.seasonal)) - 1.5 * sites.count(p.draft.recipe.site)
+                - (4 * styles.count(kind) if kind else 0))
+
     while left and len(chosen) < count:
-        best = max(left, key=lambda p: p.score - 2.5 * len(used & set(p.seasonal)) - 1.5 * sites.count(p.draft.recipe.site))
+        best = max(left, key=value)
         left.remove(best)
         chosen.append(best)
         used |= set(best.seasonal)
         sites.append(best.draft.recipe.site)
+        if kind := style(best.draft.recipe.title):
+            styles.append(kind)
     return chosen
 
 
