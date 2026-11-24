@@ -97,3 +97,12 @@ def test_score_sante():
     labels = {p["label"] for p in detail["points"]}
     assert {"Graisses saturées", "Fruits, légumes, légumineuses", "Fibres"} <= labels
     assert score_from_marmiton(None, 50) == (None, None)
+
+
+def test_etapes_donnees_en_un_seul_texte():
+    from app.services.sources import _steps
+
+    assert _steps("Couper le chou-fleur. Faire cuire 20 min! Mixer avec le lait.") == [
+        "Couper le chou-fleur.", "Faire cuire 20 min!", "Mixer avec le lait."]
+    assert _steps("Étape un\nÉtape deux") == ["Étape un", "Étape deux"]
+    assert _steps({"@type": "HowToStep", "text": "Seule étape"}) == ["Seule étape"]

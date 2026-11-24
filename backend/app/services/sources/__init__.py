@@ -90,6 +90,14 @@ def _text(value) -> str:
 
 
 def _steps(instructions) -> list[str]:
+    if isinstance(instructions, str):  # tout en un seul texte : une étape par ligne, ou par phrase
+        text = _text(instructions)
+        parts = [p for p in re.split(r"\s*\n\s*", instructions) if p.strip()]
+        if len(parts) < 2:
+            parts = re.split(r"(?<=[.!?])\s+(?=[A-ZÀ-Ý0-9])", text)
+        instructions = [p.strip() for p in parts if p.strip()]
+    if isinstance(instructions, dict):
+        instructions = [instructions]
     steps = []
     for step in instructions or []:
         if isinstance(step, dict) and step.get("@type") == "HowToSection":
