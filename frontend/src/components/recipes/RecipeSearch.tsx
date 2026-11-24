@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { api, type Diet, type Difficulty, type RecipeCard, type Term, type TermCategory } from "../../api";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { api, type Diet, type Difficulty, type RecipeCard, type TermCategory } from "../../api";
 import { ErrorMessage, inputClass, Loading, primaryButton, secondaryButton } from "../ui";
 import PhotoIngredients from "./PhotoIngredients";
 import RecipeCardView from "./RecipeCardView";
@@ -124,17 +124,26 @@ export default function RecipeSearch({
     <div className={compact ? "" : "lg:grid lg:grid-cols-[16rem_minmax(0,1fr)] lg:items-start lg:gap-4"}>
       {!compact && (
         <aside className="mb-4 hidden rounded-xl border border-stone-200 bg-white p-3 lg:sticky lg:top-4 lg:block lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto dark:border-stone-800 dark:bg-stone-900">
-          <h2 className="mb-2 text-sm font-semibold">Tous les ingrédients</h2>
+          <PhotoButton onClick={() => setPhoto(true)} />
+          <h2 className="mb-2 mt-3 flex items-center justify-between text-sm font-semibold">
+            Ingrédients à utiliser
+            {checked.length > 0 && (
+              <button type="button" className="text-xs font-normal text-stone-500 hover:underline" onClick={() => setChecked([])}>
+                Tout décocher
+              </button>
+            )}
+          </h2>
           <IngredientCategories categories={categories} checked={checked} onToggle={toggle} />
         </aside>
       )}
       <div className="min-w-0">
       <form onSubmit={search} className="mb-4 space-y-3 rounded-xl border border-stone-200 bg-white p-4 dark:border-stone-800 dark:bg-stone-900">
-        <IngredientPicker checked={checked} onToggle={toggle} onPhoto={() => setPhoto(true)} />
-        <div className={compact ? "" : "lg:hidden"}>
-          <button type="button" className="text-sm text-brand-700 hover:underline dark:text-brand-500" onClick={() => setBrowse((v) => !v)}
+        <div className={"space-y-2" + (compact ? "" : " lg:hidden")}>
+          <PhotoButton onClick={() => setPhoto(true)} />
+          <button type="button" className="block text-sm text-brand-700 hover:underline dark:text-brand-500" onClick={() => setBrowse((v) => !v)}
             aria-expanded={browse}>
-            {browse ? "Masquer la liste des ingrédients ▴" : "Parcourir tous les ingrédients par catégorie ▾"}
+            {browse ? "Masquer la liste des ingrédients ▴" : "Choisir les ingrédients par catégorie ▾"}
+            {checked.length > 0 && ` (${checked.length} coché${checked.length > 1 ? "s" : ""})`}
           </button>
           {browse && (
             <div className="mt-2 max-h-80 overflow-y-auto rounded-lg border border-stone-200 p-2 dark:border-stone-700">
@@ -345,69 +354,11 @@ function IngredientCategories({ categories, checked, onToggle }: {
   );
 }
 
-/** Ingrédients à cocher : recherche dans la liste (noms vus dans les recettes des sites), cochés, photo. */
-function IngredientPicker({ checked, onToggle, onPhoto }: { checked: string[]; onToggle: (name: string) => void; onPhoto: () => void }) {
-  const [query, setQuery] = useState("");
-  const [suggestions, setSuggestions] = useState<Term[]>([]);
-  const timer = useRef<number | undefined>(undefined);
-
-  useEffect(() => {
-    window.clearTimeout(timer.current);
-    const q = query.trim();
-    if (q.length < 2) {
-      setSuggestions([]);
-      return;
-    }
-    timer.current = window.setTimeout(() => {
-      api.ingredients(q, 12).then(setSuggestions).catch(() => setSuggestions([]));
-    }, 200);
-  }, [query]);
-
-  function pick(name: string) {
-    onToggle(name);
-    setQuery("");
-    setSuggestions([]);
-  }
-
+/** Photo : les ingrédients reconnus sont cochés dans la liste. */
+function PhotoButton({ onClick }: { onClick: () => void }) {
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-medium">Ingrédients à utiliser</span>
-        <button type="button" className={secondaryButton + " py-1 text-sm"} onClick={onPhoto}>
-          📷 Photo
-        </button>
-      </div>
-      {checked.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {checked.map((name) => (
-            <button key={name} type="button" onClick={() => onToggle(name)}
-              className="rounded-full bg-brand-600 px-2.5 py-1 text-sm text-white hover:bg-brand-700" aria-label={`Décocher ${name}`}>
-              ✓ {name} ✕
-            </button>
-          ))}
-        </div>
-      )}
-      <div className="relative">
-        <input className={inputClass} placeholder="Ajouter un ingrédient (carotte, poulet, riz…)" value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && suggestions[0]) {
-              e.preventDefault();
-              pick(suggestions[0].name);
-            }
-          }} />
-        {suggestions.length > 0 && (
-          <ul className="absolute z-10 mt-1 max-h-64 w-full overflow-y-auto rounded-lg border border-stone-200 bg-white shadow-lg dark:border-stone-700 dark:bg-stone-900">
-            {suggestions.map((s) => (
-              <li key={s.name}>
-                <button type="button" className="flex w-full justify-between px-3 py-2 text-left text-sm hover:bg-stone-50 dark:hover:bg-stone-800" onClick={() => pick(s.name)}>
-                  <span>{checked.includes(s.name) ? "✓ " : ""}{s.name}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </div>
+    <button type="button" className={secondaryButton + " w-full py-1.5 text-sm"} onClick={onClick}>
+      📷 Cocher en photo
+    </button>
   );
 }
