@@ -2,10 +2,10 @@
 
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
-from app.models import AgendaMember, Notification, PlannedMeal, Recipe, SharedAgenda, User, UserPreferences
+from app.models import AgendaMember, Notification, PlannedMeal, Recipe, SharedAgenda, ShoppingListItem, User, UserPreferences
 from app.models.enums import MemberRole, NotificationType, RecipeSource, UserRole
 from app.security import hash_password
 from app.seed.utensils import give_default_utensils
@@ -23,7 +23,9 @@ def delete_account(session: Session, user: User) -> None:
     """Supprime le compte et tout ce qui lui appartient.
 
     Agendas partagés dont il est le seul administrateur : transmis au membre le plus ancien,
-    ou supprimés s'il était seul. N'effectue pas le commit.
+    ou supprimés s'il était seul. Ce qu'il a mis dans un agenda partagé qui continue (repas, articles de courses,
+    et ses recettes maison que ces repas utilisent) reste au groupe : repris par le membre le plus ancien, comme
+    quand on quitte un agenda. N'effectue pas le commit.
     """
     if user.role == UserRole.SUPER_ADMIN:
         raise SuperAdminCannotLeave()
@@ -38,6 +40,15 @@ def delete_account(session: Session, user: User) -> None:
         if not others:
             session.delete(agenda)
             continue
+        heir = others[0].user_id
+        session.execute(update(PlannedMeal).where(PlannedMeal.user_id == user.id, PlannedMeal.shared_agenda_id == agenda.id)
+                        .values(user_id=heir))
+        session.execute(update(ShoppingListItem).where(ShoppingListItem.user_id == user.id,
+                                                       ShoppingListItem.shared_agenda_id == agenda.id).values(user_id=heir))
+        session.execute(update(Recipe).where(
+            Recipe.source == RecipeSource.USER, Recipe.author_user_id == user.id,
+            Recipe.id.in_(select(PlannedMeal.recipe_id).where(PlannedMeal.shared_agenda_id == agenda.id)),
+        ).values(author_user_id=heir))
         if membership.role == MemberRole.ADMIN and not any(o.role == MemberRole.ADMIN for o in others):
             others[0].role = MemberRole.ADMIN
             session.add(Notification(user_id=others[0].user_id, type=NotificationType.SYSTEM, created_at=datetime.now(UTC),
