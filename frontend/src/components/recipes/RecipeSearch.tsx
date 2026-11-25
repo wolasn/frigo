@@ -313,8 +313,15 @@ function IngredientCategories({ categories, checked, onToggle }: {
   onToggle: (name: string) => void;
 }) {
   const [open, setOpen] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState("");
   if (categories === null) return <Loading inline />;
   if (categories.length === 0) return <p className="text-sm text-stone-500">Aucun ingrédient connu pour l'instant.</p>;
+
+  // Filtre : ne garde que les ingrédients dont le nom contient le texte (sans tenir compte des accents ni des majuscules).
+  const q = plain(filter.trim());
+  const shown = q
+    ? categories.map((c) => ({ ...c, items: c.items.filter((t) => plain(t.name).includes(q)) })).filter((c) => c.items.length > 0)
+    : categories;
 
   function flip(category: string) {
     setOpen((current) => {
@@ -326,10 +333,28 @@ function IngredientCategories({ categories, checked, onToggle }: {
   }
 
   return (
+    <div>
+      <div className="relative mb-2">
+        <input
+          className={inputClass + " py-1.5 pr-8 text-sm"}
+          placeholder="Filtrer la liste…"
+          aria-label="Filtrer la liste des ingrédients"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && e.preventDefault()}
+        />
+        {filter && (
+          <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-700"
+            onClick={() => setFilter("")} aria-label="Effacer le filtre">
+            ✕
+          </button>
+        )}
+      </div>
+      {shown.length === 0 && <p className="px-2 text-sm text-stone-500">Aucun ingrédient ne contient « {filter.trim()} ».</p>}
     <ul className="space-y-0.5">
-      {categories.map(({ category, items }) => {
+      {shown.map(({ category, items }) => {
         const count = items.filter((t) => checked.includes(t.name)).length;
-        const isOpen = open.has(category);
+        const isOpen = q ? true : open.has(category); // en filtrant, tout ce qui reste est déplié
         return (
           <li key={category}>
             <button type="button" onClick={() => flip(category)} aria-expanded={isOpen}
@@ -359,7 +384,12 @@ function IngredientCategories({ categories, checked, onToggle }: {
         );
       })}
     </ul>
+    </div>
   );
+}
+
+function plain(text: string): string {
+  return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/œ/g, "oe").toLowerCase();
 }
 
 /** Photo : les ingrédients reconnus sont cochés dans la liste. */
